@@ -6,6 +6,7 @@ import json
 import os
 import sys
 
+
 class core():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
@@ -29,11 +30,11 @@ class core():
                 client_writer.close()
                 raise Exception
             data = await client_reader.read(2)
-            data = await client_reader.read(int.from_bytes(data,'big'))
+            data = await client_reader.read(int.from_bytes(data, 'big'))
             host, port = self.process(data)
             server_reader, server_writer = await asyncio.open_connection(host=host, port=port)
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer),loop=self.loop)
+                                 self.switch(server_reader, client_writer, server_writer), loop=self.loop)
         except Exception:
             try:
                 client_writer.close()
@@ -52,7 +53,7 @@ class core():
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await reader.read(4096)
+                data = await reader.read(16384)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
@@ -79,14 +80,15 @@ class core():
         position = data.find(b'\n')
         host = data[:position]
         position += 1
-        port = data[position:data.find(b'\n',position)]
+        port = data[position:data.find(b'\n', position)]
         return host, port
 
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
-        context.load_cert_chain(self.config['cert'],self.config['key'])
+        context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
+
 
 class yashmak(core):
     def __init__(self):
