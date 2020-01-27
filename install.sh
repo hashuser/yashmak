@@ -1,9 +1,9 @@
 #!/bin/bash
 service(){
-  touch $(cd "$(dirname "$0")";pwd)/Crack.service
-  cat>$(cd "$(dirname "$0")";pwd)/Crack.service<<EOF
+  touch $(cd "$(dirname "$0")";pwd)/Yashmak.service
+  cat>$(cd "$(dirname "$0")";pwd)/Yashmak.service<<EOF
   [Unit]
-  Description=Crack Network Service
+  Description=Yashmak Network Service
   After=rc-local.service
 
   [Service]
@@ -11,7 +11,7 @@ service(){
   User=root
   Group=root
   WorkingDirectory=$(cd "$(dirname "$0")";pwd)
-  ExecStart=/usr/bin/python3.7 $(cd "$(dirname "$0")";pwd)/Server.py
+  ExecStart=/usr/bin/python3.8 $(cd "$(dirname "$0")";pwd)/server.py
   Restart=always
   TasksMax=infinity
 
@@ -21,7 +21,7 @@ EOF
 }
 
 conf(){
-  echo "alias Crack='vim $(cd "$(dirname "$0")";pwd)/crack_server.conf'">>~/.bashrc
+  echo "alias Yashmak='vim $(cd "$(dirname "$0")";pwd)/config.json'">>~/.bashrc
   reboot
 }
 
@@ -32,20 +32,18 @@ bbr(){
 }
 
 main(){
-  mkdir $(cd "$(dirname "$0")";pwd)/Crack
-  cd $(cd "$(dirname "$0")";pwd)/Crack
+  mkdir $(cd "$(dirname "$0")";pwd)/Yashmak
+  cd $(cd "$(dirname "$0")";pwd)/Yashmak
   apt-get update
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
-  apt-get install python3.7 -y
-  wget -O Server.py https://raw.githubusercontent.com/breakwa2333/Crack/master/Server.py
-  echo 4194304 > /proc/sys/kernel/pid_max
-  echo 1000000 > /sys/fs/cgroup/pids/user.slice/user-1000.slice/pids.max
+  apt-get install python3.8 -y
+  wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   service
-  mv $(cd "$(dirname "$0")";pwd)/Crack.service /etc/systemd/system/
-  systemctl enable Crack.service
-  systemctl start Crack.service
+  mv $(cd "$(dirname "$0")";pwd)/Yashmak.service /etc/systemd/system/
+  systemctl enable Yashmak.service
+  systemctl start Yashmak.service
   bbr
   conf
 }
