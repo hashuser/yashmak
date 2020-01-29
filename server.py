@@ -5,6 +5,7 @@ import gc
 import json
 import os
 import sys
+import ipaddress
 
 
 class core():
@@ -29,26 +30,23 @@ class core():
             if data not in self.config['uuid']:
                 client_writer.close()
                 raise Exception
-            data = await client_reader.read(2)
-            data = await client_reader.read(int.from_bytes(data, 'big'))
-            host, port = self.process(data)
-            server_reader, server_writer = await asyncio.open_connection(host=host, port=port)
-            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer), loop=self.loop)
+            uuid = data
+            data = int.from_bytes((await client_reader.read(2)), 'big', signed=True)
+            if data > 0:
+                data = await client_reader.read(data)
+                host, port = self.process(data)
+                address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
+                if self.get_exception(address[0], host):
+                    self.add_host(host, uuid)
+                server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+                await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                     self.switch(server_reader, client_writer, server_writer), loop=self.loop)
+            else:
+                await self.updater(client_writer, uuid)
         except Exception:
-            try:
-                client_writer.close()
-            except Exception:
-                pass
-            try:
-                server_writer.close()
-            except Exception:
-                pass
+            self.clean_up(client_writer, server_writer)
         finally:
-            self.counter += 1
-            if self.counter > 200:
-                gc.collect()
-                self.counter = 0
+            self.get_gc()
 
     async def switch(self, reader, writer, other):
         try:
@@ -58,17 +56,41 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            writer.close()
-            other.close()
+            self.clean_up(writer, other)
         except Exception:
-            try:
-                writer.close()
-            except Exception:
-                pass
-            try:
-                other.close()
-            except Exception:
-                pass
+            self.clean_up(writer, other)
+
+    async def updater(self, writer, uuid):
+        try:
+            file = None
+            if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
+                file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'rb')
+                content = file.read()
+                file.close()
+                writer.write(content)
+                await writer.drain()
+            else:
+                writer.write(b'\n')
+                await writer.drain()
+            self.clean_up(writer, file)
+        except Exception:
+            self.clean_up(writer, file)
+
+    def clean_up(self, writer1, writer2):
+        try:
+            writer1.close()
+        except Exception:
+            pass
+        try:
+            writer2.close()
+        except Exception:
+            pass
+
+    def get_gc(self):
+        self.counter += 1
+        if self.counter > 200:
+            gc.collect()
+            self.counter = 0
 
     def exception_handler(self, loop, context):
         pass
@@ -83,6 +105,37 @@ class core():
         port = data[position:data.find(b'\n', position)]
         return host, port
 
+    def get_exception(self,ip ,host):
+        if host in self.common:
+            return False
+        sigment_length = len(host)
+        while True:
+            sigment_length = host.rfind(b'.', 0, sigment_length) - 1
+            if sigment_length <= -1:
+                break
+            if host[sigment_length + 1:] in self.common:
+                return False
+        ip = int(ipaddress.ip_address(ip))
+        for x in self.exception_list:
+            if x[0] < ip and ip < x[1]:
+                self.common.add(host)
+                return True
+        self.common.add(host)
+        self.add_host(host, b'common')
+        return False
+
+    def add_host(self, host, uuid):
+        data = []
+        if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
+            file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'r')
+            data = json.load(file)
+            file.close()
+        data.append(host.decode('utf-8'))
+        data = list(set(data))
+        file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'w')
+        json.dump(data, file)
+        file.close()
+
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -92,15 +145,18 @@ class core():
 
 class yashmak(core):
     def __init__(self):
+        self.common = set()
+        self.exception_list = []
         self.load_config()
+        self.load_exception_list()
 
     def serve_forever(self):
         core.__init__(self)
 
     def load_config(self):
-        config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/config.json'
-        if os.path.exists(config_path):
-            file = open(config_path, 'r')
+        self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
+        if os.path.exists(self.local_path + '/config.json'):
+            file = open(self.local_path + '/config.json', 'r')
             content = file.read()
             file.close()
             content = self.translate(content)
@@ -108,10 +164,33 @@ class yashmak(core):
             self.config['uuid'] = set(list(map(self.encode, self.config['uuid'])))
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'cert': '', 'key': '', 'uuid': [''], 'listen': ''}
-            file = open(config_path, 'w')
+            example = {'geoip': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
+            file = open(self.local_path + '/config.json', 'w')
             json.dump(example, file, indent=4)
             file.close()
+
+    def load_exception_list(self):
+        file = open(self.config['geoip'], 'r')
+        data = json.load(file)
+        file.close()
+        for x in data:
+            network = ipaddress.ip_network(x)
+            self.exception_list.append([int(network[0]),int(network[-1])])
+        self.exception_list.sort()
+        file = open(self.local_path + '/common.txt', 'r')
+        data = json.load(file)
+        file.close()
+        data = list(map(self.encode, data))
+        for x in data:
+            self.common.add(x.replace(b'*', b''))
+        for x in self.config['uuid']:
+            if os.path.exists(self.local_path + '/' + x.decode('utf-8')):
+                file = open(self.local_path + '/' + x.decode('utf-8'), 'r')
+                data = json.load(file)
+                file.close()
+                data = list(map(self.encode, data))
+                for y in data:
+                    self.common.add(y.replace(b'*', b''))
 
     def translate(self, content):
         return content.replace('\\', '/')

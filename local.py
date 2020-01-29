@@ -28,42 +28,15 @@ class core():
             data = await client_reader.read(65535)
             if data == b'':
                 raise Exception
-            data, host, port, request_type = self.process(data) 
-            if self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host)):
-                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                             port=self.config['port'],
-                                                                             ssl=self.context,
-                                                                             server_hostname=self.config['host'])
-                server_writer.write(self.config['uuid'])
-                await server_writer.drain()
-                server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big'))
-                await server_writer.drain()
-                server_writer.write(host + b'\n' + port + b'\n')
-                await server_writer.drain()
-            else:
-                server_reader, server_writer = await asyncio.open_connection(host=host, port=port)
-            if not request_type:
-                client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
-                await client_writer.drain()
-            else:
-                server_writer.write(data)
-                await server_writer.drain()
+            data, host, port, request_type = self.process(data)
+            type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
+            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                  self.switch(server_reader, client_writer, server_writer), loop=self.loop)
         except Exception:
-            try:
-                client_writer.close()
-            except Exception:
-                pass
-            try:
-                server_writer.close()
-            except Exception:
-                pass
+            self.clean_up(client_writer, server_writer)
         finally:
-            self.counter += 1
-            if self.counter > 200:
-                gc.collect()
-                self.counter = 0
+            self.get_gc()
 
     async def switch(self, reader, writer, other):
         try:
@@ -73,17 +46,47 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            writer.close()
-            other.close()
+            self.clean_up(writer, other)
         except Exception:
-            try:
-                writer.close()
-            except Exception:
-                pass
-            try:
-                other.close()
-            except Exception:
-                pass
+            self.clean_up(writer, other)
+
+    async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
+        if type:
+            server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                         port=self.config['port'],
+                                                                         ssl=self.context,
+                                                                         server_hostname=self.config['host'])
+            server_writer.write(self.config['uuid'])
+            await server_writer.drain()
+            server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
+            await server_writer.drain()
+            server_writer.write(host + b'\n' + port + b'\n')
+            await server_writer.drain()
+        else:
+            server_reader, server_writer = await asyncio.open_connection(host=host, port=port)
+        if not request_type:
+            client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
+            await client_writer.drain()
+        else:
+            server_writer.write(data)
+            await server_writer.drain()
+        return server_reader, server_writer
+
+    def clean_up(self, writer1, writer2):
+        try:
+            writer1.close()
+        except Exception:
+            pass
+        try:
+            writer2.close()
+        except Exception:
+            pass
+
+    def get_gc(self):
+        self.counter += 1
+        if self.counter > 200:
+            gc.collect()
+            self.counter = 0
 
     def exception_handler(self, loop, context):
         pass
@@ -153,15 +156,16 @@ class yashmak(core):
     def __init__(self):
         self.exception_list = set()
         self.load_config()
+        self.update_customize_list()
         self.load_exception_list()
 
     def serve_forever(self):
         core.__init__(self)
 
     def load_config(self):
-        config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/config.json'
-        if os.path.exists(config_path):
-            file = open(config_path, 'r')
+        self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
+        if os.path.exists(self.local_path + '/config.json'):
+            file = open(self.local_path + '/config.json', 'r')
             content = file.read()
             file.close()
             content = self.translate(content)
@@ -174,7 +178,7 @@ class yashmak(core):
         else:
             example = {'mode': '', 'active': '', 'china_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
-            file = open(config_path, 'w')
+            file = open(self.local_path + '/config.json', 'w')
             json.dump(example, file, indent=4)
             file.close()
 
@@ -186,6 +190,40 @@ class yashmak(core):
             data = list(map(self.encode,data))
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
+
+    def update_customize_list(self):
+        try:
+            print('正在更新自定义列表')
+            sock = None
+            file = None
+            sock = socket.create_connection((self.config['host'],int(self.config['port'])))
+            sock = self.get_context().wrap_socket(sock, server_hostname=self.config['host'])
+            sock.write(self.config['uuid'])
+            sock.write(int.to_bytes(-1, 2, 'big', signed=True))
+            customize = b''
+            while True:
+                data = sock.read(16384)
+                if data == b'' or data == b'\n':
+                    break
+                customize += data
+            if os.path.exists(self.config['china_list']) and customize != b'':
+                file = open(self.config['china_list'], 'r')
+                data = json.load(file)
+                file.close()
+                data += json.loads(customize)
+                data = list(set(data))
+                file = open(self.config['china_list'], 'w')
+                json.dump(data, file)
+                file.close()
+            elif customize != b'':
+                file = open(self.config['china_list'], 'wb')
+                file.write(customize)
+                file.close()
+            self.clean_up(sock, file)
+            print('更新自定义列表成功')
+        except Exception:
+            self.clean_up(sock, file)
+            print('更新自定义列表失败')
 
     def translate(self, content):
         return content.replace('\\', '/')
