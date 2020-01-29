@@ -54,7 +54,7 @@ cert(){
   openssl ecparam -genkey -name prime256v1 -out ./server/private/server.key
   openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf
   openssl req -new -key ./server/private/server.key -out ./server/request/server.csr -config ./server/conf/server.conf
-  openssl ca -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf
+  openssl ca -batch -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf
 }
 
 main(){
