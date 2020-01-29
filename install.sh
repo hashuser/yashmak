@@ -21,7 +21,8 @@ EOF
 }
 
 conf(){
-  echo "alias Yashmak='vim $(cd "$(dirname "$0")";pwd)/config.json'">>~/.bashrc
+  echo "alias Yashmak_config='vim $(cd "$(dirname "$0")";pwd)/config.json'">>~/.bashrc
+  echo "alias Yashmak_uninstall='rm -r $(cd "$(dirname "$0")";pwd)'">>~/.bashrc
   reboot
 }
 
