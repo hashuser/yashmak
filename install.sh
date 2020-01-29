@@ -46,10 +46,10 @@ cert(){
   wget -O ./server/conf/server.conf https://raw.githubusercontent.com/hashuser/yashmak/master/server.conf
   local_ip=`curl -4 ip.sb`
   echo "IP.1 = $local_ip" >> ./server/conf/server.conf
-  sed "/$ENV::HOME/.rnd/"d /etc/ssl/openssl.cnf
-  sed "s/O=Yashmak/O=$uuid/" ./server/conf/ca.conf
-  sed "s/CN=GlobalSign/CN=$local_ip/" ./server/conf/server.conf
-  sed "s/O=Yashmak/O=$uuid/" ./server/conf/server.conf
+  sed -i '/$ENV::HOME/.rnd/'d /etc/ssl/openssl.cnf
+  sed -i 's/O=Yashmak/O=$uuid/' ./demoCA/conf/ca.conf
+  sed -i 's/CN=GlobalSign/CN=$local_ip/' ./server/conf/server.conf
+  sed -i 's/O=Yashmak/O=$uuid/' ./server/conf/server.conf
   openssl ecparam -genkey -name prime256v1 -out ./demoCA/private/cakey.pem
   openssl ecparam -genkey -name prime256v1 -out ./server/private/server.key
   openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf
