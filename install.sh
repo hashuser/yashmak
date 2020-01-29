@@ -40,6 +40,8 @@ main(){
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
   apt-get install python3.8 -y
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
+  wget -O common.txt https://raw.githubusercontent.com/hashuser/yashmak/master/common.txt
+  wget -O geoip.txt https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.txt
   service
   mv $(cd "$(dirname "$0")";pwd)/Yashmak.service /etc/systemd/system/
   systemctl enable Yashmak.service
