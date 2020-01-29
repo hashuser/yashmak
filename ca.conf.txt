@@ -1,0 +1,35 @@
+[ req ]
+ 
+default_bits        = 256
+default_keyfile     = ca.key
+default_md          = sha256
+string_mask         = nombstr
+distinguished_name  = req_distinguished_name
+req_extensions      = req_ext
+x509_extensions     = x509_ext
+[ req_distinguished_name ]
+ 
+countryName                 = Country Name (2 letter code)
+countryName_default         = 
+stateOrProvinceName         = State or Province Name (full name)
+stateOrProvinceName_default = 
+localityName                = Locality Name (eg, city)
+localityName_default        = 
+organizationName            = Organization Name (eg, company)
+organizationName_default    = GlobalSign
+organizationalUnitName      = Organizational Unit Name
+organizationalUnitName_default      = GlobalSign Root CA - R3
+commonName                  = Common Name (e.g. server FQDN or YOUR name)
+commonName_max              = 64
+commonName_default          = GlobalSign
+[ x509_ext ]
+ 
+subjectKeyIdentifier   = hash
+authorityKeyIdentifier = keyid,issuer
+basicConstraints       = CA:TRUE
+keyUsage               = digitalSignature, keyEncipherment, keyCertSign, cRLSign
+[ req_ext ]
+ 
+subjectKeyIdentifier = hash
+basicConstraints     = CA:TRUE
+keyUsage             = digitalSignature, keyEncipherment, keyCertSign, cRLSign
