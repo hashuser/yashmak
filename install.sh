@@ -46,7 +46,7 @@ cert(){
   wget -O ./server/conf/server.conf https://raw.githubusercontent.com/hashuser/yashmak/master/server.conf
   local_ip=`curl -4 ip.sb`
   echo "IP.1 = $local_ip" >> ./server/conf/server.conf
-  sed -i "RANDFILE"d /etc/ssl/openssl.cnf
+  sed -i "s^RANDFILE		= $ENV::HOME/.rnd^# RANDFILE		= $ENV::HOME/.rnd^" /etc/ssl/openssl.cnf
   sed -i "s/O=Yashmak/O=$uuid/" ./demoCA/conf/ca.conf
   sed -i "s/CN=GlobalSign/CN=$local_ip/" ./server/conf/server.conf
   sed -i "s/O=Yashmak/O=$uuid/" ./server/conf/server.conf
