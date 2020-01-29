@@ -63,7 +63,14 @@ class core():
             server_writer.write(host + b'\n' + port + b'\n')
             await server_writer.drain()
         else:
-            server_reader, server_writer = await asyncio.open_connection(host=host, port=port)
+            address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
+            if address[0] != '127.0.0.1':
+                server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+            else:
+                if not request_type:
+                    client_writer.write(b'''HTTP/1.1 404 Not Found"\r\nProxy-Connection: close\r\n\r\n''')
+                    await client_writer.drain()
+                raise Exception
         if not request_type:
             client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
             await client_writer.drain()
@@ -193,11 +200,13 @@ class yashmak(core):
 
     def update_customize_list(self):
         try:
-            print('正在更新自定义列表')
+            print('准备更新自定义列表')
             sock = None
             file = None
+            print('正在连接服务器...')
             sock = socket.create_connection((self.config['host'],int(self.config['port'])))
             sock = self.get_context().wrap_socket(sock, server_hostname=self.config['host'])
+            print('服务器连接成功')
             sock.write(self.config['uuid'])
             sock.write(int.to_bytes(-1, 2, 'big', signed=True))
             customize = b''
