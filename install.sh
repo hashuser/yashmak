@@ -47,9 +47,9 @@ cert(){
   echo "IP.1 = $local_ip" >> ./server/conf/server.conf
   openssl ecparam -genkey -name prime256v1 -out ./demoCA/private/cakey.pem
   openssl ecparam -genkey -name prime256v1 -out ./server/private/server.key
-  openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf -subj "/C=CN/ST=Shanghai/L=Shanghai/O=$uuid/OU=GlobalSign Root CA - R3/CN=GlobalSign"
-  openssl req -new -key ./server/private/server.key -out ./server/request/server.csr -config ./server/conf/server.conf -subj "/C=CN/ST=Shanghai/L=Shanghai/O=$uuid/OU=GlobalSign Root CA - R3/CN=$local_ip"
-  openssl ca -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf -y -y
+  openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf
+  openssl req -new -key ./server/private/server.key -out ./server/request/server.csr -config ./server/conf/server.conf
+  openssl ca -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf
 }
 
 main(){
