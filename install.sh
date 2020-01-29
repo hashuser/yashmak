@@ -31,6 +31,22 @@ bbr(){
   sysctl -p
 }
 
+cert(){
+  apt-get install openssl
+  mkdir -p ./demoCA/{private,newcerts,conf}
+  mkdir -p ./server/{private,request,conf}
+  touch ./demoCA/index.txt
+  touch ./demoCA/index.txt.attr
+  touch ./demoCA/serial
+  echo 01 > ./demoCA/serial
+  wget -O ./demoCA/conf/ca.conf https://raw.githubusercontent.com/hashuser/yashmak/master/ca.conf
+  wget -O ./server/conf/server.conf https://raw.githubusercontent.com/hashuser/yashmak/master/server.conf
+  local_ip=`curl -4 ip.sb`
+  echo "IP.1 = $local_ip" >> ./server/conf/server.conf
+  openssl ecparam -genkey -name prime256v1 -out ./demoCA/private/cakey.pem
+  openssl ecparam -genkey -name prime256v1 -out ./server/private/server.key
+}
+
 main(){
   mkdir $(cd "$(dirname "$0")";pwd)/Yashmak
   cd $(cd "$(dirname "$0")";pwd)/Yashmak
@@ -47,6 +63,7 @@ main(){
   systemctl enable Yashmak.service
   systemctl start Yashmak.service
   bbr
+  cert
   conf
 }
 
