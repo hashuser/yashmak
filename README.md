@@ -1,6 +1,6 @@
 ### Install
 ```
-curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.sh | bash
+sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.sh | bash
 ``` 
 ### Config
 ```
