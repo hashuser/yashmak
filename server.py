@@ -115,6 +115,7 @@ class core():
                 break
             if host[sigment_length + 1:] in self.common:
                 return False
+        ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
         for x in self.exception_list:
             if x[0] < ip and ip < x[1]:
