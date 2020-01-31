@@ -24,6 +24,7 @@ class core():
         self.connection_pool = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
+        self.loop.create_task(self.pool())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -39,13 +40,6 @@ class core():
         except Exception:
             self.clean_up(client_writer, server_writer)
         finally:
-            if self.connection_counter < 8:
-                self.connection_counter += 1
-                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                             port=self.config['port'],
-                                                                             ssl=self.context,
-                                                                             server_hostname=self.config['host'])
-                self.connection_pool.append((server_reader, server_writer))
             self.get_gc()
 
     async def switch(self, reader, writer, other):
@@ -62,6 +56,7 @@ class core():
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         if type:
+            S = time.time()
             if self.connection_pool == []:
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
@@ -76,6 +71,8 @@ class core():
             await server_writer.drain()
             server_writer.write(host + b'\n' + port + b'\n')
             await server_writer.drain()
+            E = time.time()
+            print('初始化用时:',round((E-S)*1000,1),'ms')
         else:
             address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
             if address[0] != '127.0.0.1':
@@ -109,6 +106,23 @@ class core():
             gc.collect()
             self.gc_counter = 0
 
+    async def pool(self):
+        while True:
+            if self.connection_counter < 16:
+                try:
+                    server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                                 port=self.config['port'],
+                                                                                 ssl=self.context,
+                                                                                 server_hostname=self.config['host'])
+                    self.connection_pool.append((server_reader, server_writer))
+                    self.connection_counter += 1
+                except Exception:
+                    pass
+            else:
+                print('Pool已充满')
+                await asyncio.sleep(1)
+
+
     def exception_handler(self, loop, context):
         pass
 
@@ -125,6 +139,8 @@ class core():
             request_type = 1
         elif data[:4] == b'POST':
             request_type = 2
+        else:
+            request_type = 3
         return request_type
 
     def get_address(self, data, request_type):
