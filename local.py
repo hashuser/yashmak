@@ -5,6 +5,7 @@ import gc
 import json
 import os
 import sys
+import time
 
 
 class core():
@@ -18,7 +19,9 @@ class core():
                                             dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024, loop=self.loop)
         self.context = self.get_context()
-        self.counter = 0
+        self.gc_counter = 0
+        self.connection_counter = 0
+        self.connection_pool = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.run_forever()
@@ -36,6 +39,13 @@ class core():
         except Exception:
             self.clean_up(client_writer, server_writer)
         finally:
+            if self.connection_counter < 8:
+                self.connection_counter += 1
+                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                             port=self.config['port'],
+                                                                             ssl=self.context,
+                                                                             server_hostname=self.config['host'])
+                self.connection_pool.append((server_reader, server_writer))
             self.get_gc()
 
     async def switch(self, reader, writer, other):
@@ -52,10 +62,14 @@ class core():
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         if type:
-            server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                         port=self.config['port'],
-                                                                         ssl=self.context,
-                                                                         server_hostname=self.config['host'])
+            if self.connection_pool == []:
+                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                             port=self.config['port'],
+                                                                             ssl=self.context,
+                                                                             server_hostname=self.config['host'])
+            else:
+                server_reader, server_writer = self.connection_pool.pop(0)
+                self.connection_counter -= 1
             server_writer.write(self.config['uuid'])
             await server_writer.drain()
             server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
@@ -90,10 +104,10 @@ class core():
             pass
 
     def get_gc(self):
-        self.counter += 1
-        if self.counter > 200:
+        self.gc_counter += 1
+        if self.gc_counter > 200:
             gc.collect()
-            self.counter = 0
+            self.gc_counter = 0
 
     def exception_handler(self, loop, context):
         pass
@@ -204,9 +218,13 @@ class yashmak(core):
             sock = None
             file = None
             print('正在连接服务器...')
+            S = time.time()
             sock = socket.create_connection((self.config['host'],int(self.config['port'])))
+            E1 = time.time()
             sock = self.get_context().wrap_socket(sock, server_hostname=self.config['host'])
-            print('服务器连接成功')
+            E2 = time.time()
+            print('服务器连接成功:\nInitial-connection:',round((E1-S)*1000,1),
+                  'ms\nTLS-Handshake:',round((E2-E1)*1000,1),'ms')
             sock.write(self.config['uuid'])
             sock.write(int.to_bytes(-1, 2, 'big', signed=True))
             customize = b''
