@@ -119,10 +119,10 @@ class core():
         ip = int(ipaddress.ip_address(ip))
         for x in self.exception_list:
             if x[0] < ip and ip < x[1]:
-                self.common.add(host)
+                self.common.add(self.conclude(host).replace(b'*', b''))
                 return True
-        self.common.add(host)
-        self.add_host(host, b'common')
+        self.common.add(self.conclude(host).replace(b'*', b''))
+        self.add_host(self.conclude(host), b'common')
         return False
 
     def add_host(self, host, uuid):
@@ -131,11 +131,30 @@ class core():
             file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'r')
             data = json.load(file)
             file.close()
-        data.append(host.decode('utf-8'))
+        data.append(self.conclude(host).decode('utf-8'))
         data = list(set(data))
         file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'w')
         json.dump(data, file)
         file.close()
+
+    def conclude(self, data):
+        def detect(data):
+            if data.count(b':') != 0 or data.count(b'.') <= 1:
+                return False
+            SLD = {b'com', b'net', b'org', b'gov',
+                   b'co', b'edu', b'uk', b'us', b'kr',
+                   b'au', b'hk', b'is', b'jpn', b'gb', b'gr'}
+            if data.split(b'.')[-2] in SLD and data.count(b'.') < 3:
+                return False
+            for x in data:
+                if x < 48 and x != 46 or x > 57:
+                    return True
+            return False
+
+        if detect(data):
+            return b'*' + data[data.find(b'.'):]
+        else:
+            return data
 
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)

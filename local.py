@@ -5,7 +5,6 @@ import gc
 import json
 import os
 import sys
-import time
 
 
 class core():
@@ -25,6 +24,7 @@ class core():
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.pool())
+        self.loop.create_task(self.update_expection_list())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -56,7 +56,6 @@ class core():
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         if type:
-            S = time.time()
             if self.connection_pool == []:
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
@@ -71,8 +70,6 @@ class core():
             await server_writer.drain()
             server_writer.write(host + b'\n' + port + b'\n')
             await server_writer.drain()
-            E = time.time()
-            print('初始化用时:',round((E-S)*1000,1),'ms')
         else:
             address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
             if address[0] != '127.0.0.1':
@@ -122,6 +119,46 @@ class core():
                 print('Pool已充满')
                 await asyncio.sleep(1)
 
+    async def update_expection_list(self):
+        while True:
+            try:
+                server_reader = None
+                server_writer = None
+                file = None
+                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                             port=self.config['port'],
+                                                                             ssl=self.context,
+                                                                             server_hostname=self.config['host'])
+                server_writer.write(self.config['uuid'])
+                await server_writer.drain()
+                server_writer.write(int.to_bytes(-1, 2, 'big', signed=True))
+                await server_writer.drain()
+                customize = b''
+                while True:
+                    data = await server_reader.read(16384)
+                    if data == b'' or data == b'\n':
+                        break
+                    customize += data
+                if os.path.exists(self.config['china_list']) and customize != b'':
+                    file = open(self.config['china_list'], 'r')
+                    data = json.load(file)
+                    file.close()
+                    customize = json.loads(customize)
+                    data += customize
+                    for x in list(map(self.encode, customize)):
+                        self.exception_list.add(x.replace(b'*', b''))
+                    data = list(set(data))
+                    file = open(self.config['china_list'], 'w')
+                    json.dump(data, file)
+                    file.close()
+                elif customize != b'':
+                    file = open(self.config['china_list'], 'wb')
+                    file.write(customize)
+                    file.close()
+                self.clean_up(server_writer, file)
+            except Exception:
+                self.clean_up(server_writer, file)
+            await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):
         pass
@@ -185,7 +222,7 @@ class core():
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.verify_mode = ssl.CERT_REQUIRED
         context.check_hostname = True
-        context.load_verify_locations(self.config['cert'])
+        context.load_verify_locations(self.config_path + self.config['cert'])
         return context
 
 
@@ -193,29 +230,29 @@ class yashmak(core):
     def __init__(self):
         self.exception_list = set()
         self.load_config()
-        self.update_customize_list()
+        self.set_proxy()
         self.load_exception_list()
 
     def serve_forever(self):
         core.__init__(self)
 
     def load_config(self):
-        self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
-        if os.path.exists(self.local_path + '/config.json'):
-            file = open(self.local_path + '/config.json', 'r')
+        self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
+        if os.path.exists(self.config_path + 'config.json'):
+            file = open(self.config_path + 'config.json', 'r')
             content = file.read()
             file.close()
             content = self.translate(content)
             self.config = json.loads(content)
             self.config[self.config['active']]['mode'] = self.config['mode']
-            self.config[self.config['active']]['china_list'] = self.config['china_list']
+            self.config[self.config['active']]['china_list'] = self.config_path + self.config['china_list']
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'mode': '', 'active': '', 'china_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
-            file = open(self.local_path + '/config.json', 'w')
+            file = open(self.config_path + 'config.json', 'w')
             json.dump(example, file, indent=4)
             file.close()
 
@@ -228,45 +265,12 @@ class yashmak(core):
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
 
-    def update_customize_list(self):
-        try:
-            print('准备更新自定义列表')
-            sock = None
-            file = None
-            print('正在连接服务器...')
-            S = time.time()
-            sock = socket.create_connection((self.config['host'],int(self.config['port'])))
-            E1 = time.time()
-            sock = self.get_context().wrap_socket(sock, server_hostname=self.config['host'])
-            E2 = time.time()
-            print('服务器连接成功:\nInitial-connection:',round((E1-S)*1000,1),
-                  'ms\nTLS-Handshake:',round((E2-E1)*1000,1),'ms')
-            sock.write(self.config['uuid'])
-            sock.write(int.to_bytes(-1, 2, 'big', signed=True))
-            customize = b''
-            while True:
-                data = sock.read(16384)
-                if data == b'' or data == b'\n':
-                    break
-                customize += data
-            if os.path.exists(self.config['china_list']) and customize != b'':
-                file = open(self.config['china_list'], 'r')
-                data = json.load(file)
-                file.close()
-                data += json.loads(customize)
-                data = list(set(data))
-                file = open(self.config['china_list'], 'w')
-                json.dump(data, file)
-                file.close()
-            elif customize != b'':
-                file = open(self.config['china_list'], 'wb')
-                file.write(customize)
-                file.close()
-            self.clean_up(sock, file)
-            print('更新自定义列表成功')
-        except Exception:
-            self.clean_up(sock, file)
-            print('更新自定义列表失败')
+    def set_proxy(self):
+        platform = sys.platform
+        if platform == 'win32':
+            os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f''')
+            os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /d "127.0.0.1:'''+str(self.config['listen'])+'''" /f''')
+            os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /d "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>" /f''')
 
     def translate(self, content):
         return content.replace('\\', '/')
