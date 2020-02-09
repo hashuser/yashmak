@@ -16,3 +16,7 @@ sudo Yashmak_config
 ```
 sudo Yashmak_uninstall
 ```
+### 重启
+```
+sudo systemctl restart Yashmak
+```
