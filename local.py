@@ -19,7 +19,6 @@ class core():
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024, loop=self.loop)
         self.context = self.get_context()
         self.gc_counter = 0
-        self.connection_counter = 0
         self.connection_pool = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
@@ -66,7 +65,6 @@ class core():
                 await server_writer.drain()
             else:
                 server_reader, server_writer = self.connection_pool.pop(0)
-                self.connection_counter -= 1
             server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
             await server_writer.drain()
             server_writer.write(host + b'\n' + port + b'\n')
@@ -105,8 +103,9 @@ class core():
             self.gc_counter = 0
 
     async def pool(self):
+        pool_max_size = 4
         while True:
-            if self.connection_counter < 16:
+            while len(self.connection_pool) < pool_max_size:
                 try:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
@@ -115,12 +114,12 @@ class core():
                     server_writer.write(self.config['uuid'])
                     await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
-                    self.connection_counter += 1
                 except Exception:
                     pass
-            else:
-                print('Pool已充满')
-                await asyncio.sleep(1)
+            await asyncio.sleep(1)
+            if len(self.connection_pool) < (pool_max_size / 2):
+                pool_max_size *= 2
+            print('现有连接:',len(self.connection_pool),'最大连接数:',pool_max_size)
 
     async def pool_health(self):
         while True:
@@ -129,9 +128,9 @@ class core():
                     x[1].write(int.to_bytes(0, 2, 'big', signed=True))
                     await x[1].drain()
                 except Exception:
+                    print('连接失效，已在清除')
                     self.connection_pool.remove(x)
                     self.clean_up(x[0], x[1])
-                    self.connection_counter -= 1
             await asyncio.sleep(5)
 
     async def update_expection_list(self):
