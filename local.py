@@ -24,6 +24,7 @@ class core():
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.pool())
+        self.loop.create_task(self.pool_health())
         self.loop.create_task(self.update_expection_list())
         self.loop.run_forever()
 
@@ -61,11 +62,11 @@ class core():
                                                                              port=self.config['port'],
                                                                              ssl=self.context,
                                                                              server_hostname=self.config['host'])
+                server_writer.write(self.config['uuid'])
+                await server_writer.drain()
             else:
                 server_reader, server_writer = self.connection_pool.pop(0)
                 self.connection_counter -= 1
-            server_writer.write(self.config['uuid'])
-            await server_writer.drain()
             server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
             await server_writer.drain()
             server_writer.write(host + b'\n' + port + b'\n')
@@ -111,6 +112,8 @@ class core():
                                                                                  port=self.config['port'],
                                                                                  ssl=self.context,
                                                                                  server_hostname=self.config['host'])
+                    server_writer.write(self.config['uuid'])
+                    await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
                     self.connection_counter += 1
                 except Exception:
@@ -118,6 +121,18 @@ class core():
             else:
                 print('Pool已充满')
                 await asyncio.sleep(1)
+
+    async def pool_health(self):
+        while True:
+            for x in self.connection_pool:
+                try:
+                    x[1].write(int.to_bytes(0, 2, 'big', signed=True))
+                    await x[1].drain()
+                except Exception:
+                    self.connection_pool.remove(x)
+                    self.clean_up(x[0], x[1])
+                    self.connection_counter -= 1
+            await asyncio.sleep(5)
 
     async def update_expection_list(self):
         while True:
@@ -232,6 +247,7 @@ class yashmak(core):
         self.load_config()
         self.set_proxy()
         self.load_exception_list()
+        self.write_pid()
 
     def serve_forever(self):
         core.__init__(self)
@@ -271,6 +287,11 @@ class yashmak(core):
             os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f''')
             os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /d "127.0.0.1:'''+str(self.config['listen'])+'''" /f''')
             os.system('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /d "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>" /f''')
+
+    def write_pid(self):
+        file = open(self.config_path + 'pid','w')
+        file.write(str(os.getpid()))
+        file.close()
 
     def translate(self, content):
         return content.replace('\\', '/')

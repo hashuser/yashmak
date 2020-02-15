@@ -22,27 +22,28 @@ class core():
         self.counter = 0
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
+        self.loop.create_task(self.write_host())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
         try:
-            data = await client_reader.read(36)
-            if data not in self.config['uuid']:
+            uuid = await client_reader.read(36)
+            if uuid not in self.config['uuid']:
                 client_writer.close()
                 raise Exception
-            uuid = data
-            data = int.from_bytes((await client_reader.read(2)), 'big', signed=True)
-            if data > 0:
-                data = await client_reader.read(data)
-                host, port = self.process(data)
-                address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
-                if self.get_exception(address[0], host):
-                    self.add_host(host, uuid)
-                server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
-                await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                     self.switch(server_reader, client_writer, server_writer), loop=self.loop)
-            else:
-                await self.updater(client_writer, uuid)
+            data = 0
+            while data == 0:
+                data = int.from_bytes((await client_reader.read(2)), 'big', signed=True)
+                if data > 0:
+                    data = await client_reader.read(data)
+                    host, port = self.process(data)
+                    address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
+                    self.is_china_ip(address[0], host, uuid)
+                    server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+                    await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                         self.switch(server_reader, client_writer, server_writer), loop=self.loop)
+                elif data == -1:
+                    await self.updater(client_writer, uuid)
         except Exception:
             self.clean_up(client_writer, server_writer)
         finally:
@@ -105,37 +106,43 @@ class core():
         port = data[position:data.find(b'\n', position)]
         return host, port
 
-    def get_exception(self,ip ,host):
-        if host in self.common:
-            return False
-        sigment_length = len(host)
-        while True:
-            sigment_length = host.rfind(b'.', 0, sigment_length) - 1
-            if sigment_length <= -1:
-                break
-            if host[sigment_length + 1:] in self.common:
+    def is_china_ip(self,ip ,host, uuid):
+        for x in [b'foreign',uuid]:
+            if host in self.host_list[x]:
                 return False
+            sigment_length = len(host)
+            while True:
+                sigment_length = host.rfind(b'.', 0, sigment_length) - 1
+                if sigment_length <= -1:
+                    break
+                if host[sigment_length + 1:] in self.host_list[x]:
+                    return False
         ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
-        for x in self.exception_list:
+        for x in self.geoip_list:
             if x[0] < ip and ip < x[1]:
-                self.common.add(self.conclude(host).replace(b'*', b''))
+                self.add_host(self.conclude(host), uuid)
                 return True
-        self.common.add(self.conclude(host).replace(b'*', b''))
-        self.add_host(self.conclude(host), b'common')
+        self.add_host(self.conclude(host), b'foreign')
         return False
 
     def add_host(self, host, uuid):
-        data = []
-        if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
-            file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'r')
-            data = json.load(file)
-            file.close()
-        data.append(self.conclude(host).decode('utf-8'))
-        data = list(set(data))
-        file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'w')
-        json.dump(data, file)
-        file.close()
+        if uuid in self.host_list:
+            self.host_list[uuid].add(host.replace(b'*',b''))
+        else:
+            self.host_list[uuid] = set(host.replace(b'*',b''))
+
+    async def write_host(self):
+        def encode(host):
+            if host[0] == 46:
+                return '*' + host.decode('utf-8')
+            return host.decode('utf-8')
+        while True:
+            for x in self.host_list:
+                file = open(self.local_path + '/' + x.decode('utf-8') + '.txt', 'w')
+                json.dump(list(map(encode,list(self.host_list[x]))), file)
+                file.close()
+            await asyncio.sleep(60)
 
     def conclude(self, data):
         def detect(data):
@@ -165,10 +172,10 @@ class core():
 
 class yashmak(core):
     def __init__(self):
-        self.common = set()
-        self.exception_list = []
+        self.host_list = dict()
+        self.geoip_list = []
         self.load_config()
-        self.load_exception_list()
+        self.load_lists()
 
     def serve_forever(self):
         core.__init__(self)
@@ -189,28 +196,25 @@ class yashmak(core):
             json.dump(example, file, indent=4)
             file.close()
 
-    def load_exception_list(self):
+    def load_lists(self):
         file = open(self.config['geoip'], 'r')
         data = json.load(file)
         file.close()
         for x in data:
             network = ipaddress.ip_network(x)
-            self.exception_list.append([int(network[0]),int(network[-1])])
-        self.exception_list.sort()
-        file = open(self.local_path + '/common.txt', 'r')
-        data = json.load(file)
-        file.close()
-        data = list(map(self.encode, data))
-        for x in data:
-            self.common.add(x.replace(b'*', b''))
-        for x in self.config['uuid']:
-            if os.path.exists(self.local_path + '/' + x.decode('utf-8')):
-                file = open(self.local_path + '/' + x.decode('utf-8'), 'r')
+            self.geoip_list.append([int(network[0]),int(network[-1])])
+        self.geoip_list.sort()
+        self.exception_list_name = self.config['uuid']
+        self.exception_list_name.add(b'foreign')
+        for x in self.exception_list_name:
+            self.host_list[x] = set()
+            if os.path.exists(self.local_path + '/' + x.decode('utf-8') + '.txt'):
+                file = open(self.local_path + '/' + x.decode('utf-8') + '.txt', 'r')
                 data = json.load(file)
                 file.close()
                 data = list(map(self.encode, data))
                 for y in data:
-                    self.common.add(y.replace(b'*', b''))
+                    self.host_list[x].add(y.replace(b'*', b''))
 
     def translate(self, content):
         return content.replace('\\', '/')
