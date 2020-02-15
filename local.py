@@ -77,7 +77,7 @@ class core():
                 server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
             else:
                 if not request_type:
-                    client_writer.write(b'''HTTP/1.1 404 Not Found"\r\nProxy-Connection: close\r\n\r\n''')
+                    client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
                     await client_writer.drain()
                 raise Exception
         if not request_type:
