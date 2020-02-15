@@ -29,6 +29,8 @@ class core():
         try:
             uuid = await client_reader.read(36)
             if uuid not in self.config['uuid']:
+                client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
+                await client_writer.drain()
                 client_writer.close()
                 raise Exception
             data = 0
