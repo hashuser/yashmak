@@ -32,7 +32,7 @@ class core():
             data = await client_reader.read(65535)
             if data == b'':
                 raise Exception
-            data, host, port, request_type = self.process(data)
+            data, host, port, request_type = await self.process(data, client_reader, client_writer)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
@@ -81,7 +81,7 @@ class core():
         if not request_type:
             client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
             await client_writer.drain()
-        else:
+        elif data != None:
             server_writer.write(data)
             await server_writer.drain()
         return server_reader, server_writer
@@ -177,10 +177,13 @@ class core():
     def exception_handler(self, loop, context):
         pass
 
-    def process(self, data):
+    async def process(self, data, client_reader, client_writer):
         request_type = self.get_request_type(data)
-        host, port = self.get_address(data, request_type)
-        data = self.get_response(data, request_type, host, port)
+        host, port = await self.get_address(data, request_type, client_reader, client_writer)
+        if request_type == 0 or request_type == 3:
+            data = None
+        else:
+            data = self.get_response(data, request_type, host, port)
         return data, host, port, request_type
 
     def get_request_type(self, data):
@@ -194,21 +197,37 @@ class core():
             request_type = 3
         return request_type
 
-    def get_address(self, data, request_type):
-        position = data.find(b' ') + 1
-        sigment = data[position:data.find(b' ', position)]
-        if request_type:
-            position = sigment.find(b'//') + 2
-            sigment = sigment[position:sigment.find(b'/', position)]
-        position = sigment.rfind(b':')
-        if position > 0 and position > sigment.rfind(b']'):
-            host = sigment[:position]
-            port = sigment[position + 1:]
+    async def get_address(self, data, request_type, client_reader, client_writer):
+        if request_type != 3:
+            position = data.find(b' ') + 1
+            sigment = data[position:data.find(b' ', position)]
+            if request_type:
+                position = sigment.find(b'//') + 2
+                sigment = sigment[position:sigment.find(b'/', position)]
+            position = sigment.rfind(b':')
+            if position > 0 and position > sigment.rfind(b']'):
+                host = sigment[:position]
+                port = sigment[position + 1:]
+            else:
+                host = sigment
+                port = b'80'
+            host = host.replace(b'[', b'', 1)
+            host = host.replace(b']', b'', 1)
         else:
-            host = sigment
-            port = b'80'
-        host = host.replace(b'[', b'', 1)
-        host = host.replace(b']', b'', 1)
+            client_writer.write(b'\x05\x00')
+            await client_writer.drain()
+            data = await client_reader.read(16384)
+            if data[3] == 1:
+                host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
+                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+            elif data[3] == 4:
+                host = socket.inet_ntop(socket.AF_INET6, data[4:20]).encode('utf-8')
+                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+            elif data[3] == 3:
+                host = data[5:5 + data[4]]
+                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+            client_writer.write(b'\x05\x00\x00' + data[3:])
+            await client_writer.drain()
         return host, port
 
     def get_response(self, data, request_type, host, port):
