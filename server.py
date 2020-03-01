@@ -7,7 +7,6 @@ import os
 import sys
 import ipaddress
 
-
 class core():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
@@ -17,17 +16,17 @@ class core():
         else:
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024, loop=self.loop,
-                                      ssl=self.get_context())
-        self.counter = 0
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
+        self.loop.create_task(self.clear())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
         try:
-            uuid = await client_reader.read(36)
+            server_writer = None
+            uuid = await asyncio.wait_for(client_reader.read(36), 20)
             if uuid not in self.config['uuid']:
                 client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
                 await client_writer.drain()
@@ -35,7 +34,7 @@ class core():
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await client_reader.read(2)), 'big', signed=True)
+                data = int.from_bytes((await asyncio.wait_for(client_reader.read(2), 20)), 'big', signed=True)
                 if data > 0:
                     data = await client_reader.read(data)
                     host, port = self.process(data)
@@ -43,13 +42,11 @@ class core():
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                         self.switch(server_reader, client_writer, server_writer), loop=self.loop)
+                                         self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
         except Exception:
             self.clean_up(client_writer, server_writer)
-        finally:
-            self.get_gc()
 
     async def switch(self, reader, writer, other):
         try:
@@ -88,12 +85,6 @@ class core():
             writer2.close()
         except Exception:
             pass
-
-    def get_gc(self):
-        self.counter += 1
-        if self.counter > 200:
-            gc.collect()
-            self.counter = 0
 
     def exception_handler(self, loop, context):
         pass
@@ -146,6 +137,11 @@ class core():
                 file.close()
             await asyncio.sleep(60)
 
+    async def clear(self):
+        while True:
+            gc.collect()
+            await asyncio.sleep(60)
+
     def conclude(self, data):
         def detect(data):
             if data.count(b':') != 0 or data.count(b'.') <= 1:
@@ -175,6 +171,7 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.host_list = dict()
+        self.connection_activity = dict()
         self.geoip_list = []
         self.load_config()
         self.load_lists()
