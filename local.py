@@ -16,9 +16,8 @@ class core():
         else:
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024, loop=self.loop)
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024)
         self.context = self.get_context()
-        self.gc_counter = 0
         self.connection_pool = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
@@ -29,23 +28,22 @@ class core():
 
     async def handler(self, client_reader, client_writer):
         try:
-            data = await client_reader.read(65535)
+            server_writer = None
+            data = await asyncio.wait_for(client_reader.read(65535), 20)
             if data == b'':
                 raise Exception
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer), loop=self.loop)
+                                 self.switch(server_reader, client_writer, server_writer))
         except Exception:
             self.clean_up(client_writer, server_writer)
-        finally:
-            self.get_gc()
 
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await reader.read(16384)
+                data = await asyncio.wait_for(reader.read(16384), 300)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
@@ -96,12 +94,6 @@ class core():
         except Exception:
             pass
 
-    def get_gc(self):
-        self.gc_counter += 1
-        if self.gc_counter > 200:
-            gc.collect()
-            self.gc_counter = 0
-
     async def pool(self):
         pool_max_size = 4
         while True:
@@ -115,7 +107,7 @@ class core():
                     await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
                 except Exception:
-                    pass
+                   pass
             await asyncio.sleep(1)
             if len(self.connection_pool) < (pool_max_size / 2):
                 pool_max_size *= 2
@@ -123,15 +115,18 @@ class core():
 
     async def pool_health(self):
         while True:
+            if len(self.connection_pool) != 0:
+                interval = 4 / len(self.connection_pool)
             for x in self.connection_pool:
                 try:
                     x[1].write(int.to_bytes(0, 2, 'big', signed=True))
                     await x[1].drain()
+                    await asyncio.sleep(interval)
                 except Exception:
                     print('连接失效，已在清除')
                     self.connection_pool.remove(x)
                     self.clean_up(x[0], x[1])
-            await asyncio.sleep(5)
+            await asyncio.sleep(1)
 
     async def update_expection_list(self):
         while True:
@@ -172,6 +167,7 @@ class core():
                 self.clean_up(server_writer, file)
             except Exception:
                 self.clean_up(server_writer, file)
+            gc.collect()
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):
@@ -216,7 +212,7 @@ class core():
         else:
             client_writer.write(b'\x05\x00')
             await client_writer.drain()
-            data = await client_reader.read(16384)
+            data = await asyncio.wait_for(client_reader.read(16384), 20)
             if data[3] == 1:
                 host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
                 port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
@@ -262,6 +258,7 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.exception_list = set()
+        self.peer = dict()
         self.load_config()
         self.set_proxy()
         self.load_exception_list()

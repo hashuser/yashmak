@@ -36,7 +36,7 @@ class core():
             while data == 0:
                 data = int.from_bytes((await asyncio.wait_for(client_reader.read(2), 20)), 'big', signed=True)
                 if data > 0:
-                    data = await client_reader.read(data)
+                    data = await asyncio.wait_for(client_reader.read(data), 20)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
@@ -51,7 +51,7 @@ class core():
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await reader.read(16384)
+                data = await asyncio.wait_for(reader.read(16384), 300)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
@@ -171,7 +171,6 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.host_list = dict()
-        self.connection_activity = dict()
         self.geoip_list = []
         self.load_config()
         self.load_lists()
