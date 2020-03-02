@@ -24,6 +24,7 @@ class core():
         self.loop.create_task(self.pool())
         self.loop.create_task(self.pool_health())
         self.loop.create_task(self.update_expection_list())
+        self.loop.create_task(self.clear())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -128,6 +129,11 @@ class core():
                     self.clean_up(x[0], x[1])
             await asyncio.sleep(1)
 
+    async def clear(self):
+        while True:
+            gc.collect()
+            await asyncio.sleep(60)
+
     async def update_expection_list(self):
         while True:
             try:
@@ -167,7 +173,6 @@ class core():
                 self.clean_up(server_writer, file)
             except Exception:
                 self.clean_up(server_writer, file)
-            gc.collect()
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):
@@ -258,7 +263,6 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.exception_list = set()
-        self.peer = dict()
         self.load_config()
         self.set_proxy()
         self.load_exception_list()
