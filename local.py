@@ -29,29 +29,28 @@ class core():
 
     async def handler(self, client_reader, client_writer):
         try:
-            server_writer = None
             data = await asyncio.wait_for(client_reader.read(65535), 20)
             if data == b'':
                 raise Exception
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
-            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer))
+            tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                         self.switch(server_reader, client_writer, server_writer))
         except Exception:
-            self.clean_up(client_writer, server_writer)
+            await self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await asyncio.wait_for(reader.read(16384), 300)
+                data = await reader.read(16384)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
                     break
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
         except Exception:
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         if type:
@@ -85,13 +84,18 @@ class core():
             await server_writer.drain()
         return server_reader, server_writer
 
-    def clean_up(self, writer1, writer2):
+    async def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
         except Exception:
             pass
         try:
             writer2.close()
+        except Exception:
+            pass
+        try:
+            for x in tasks:
+                x.cancel()
         except Exception:
             pass
 
@@ -116,18 +120,15 @@ class core():
 
     async def pool_health(self):
         while True:
-            if len(self.connection_pool) != 0:
-                interval = 4 / len(self.connection_pool)
             for x in self.connection_pool:
                 try:
                     x[1].write(int.to_bytes(0, 2, 'big', signed=True))
                     await x[1].drain()
-                    await asyncio.sleep(interval)
                 except Exception:
                     print('连接失效，已在清除')
                     self.connection_pool.remove(x)
-                    self.clean_up(x[0], x[1])
-            await asyncio.sleep(1)
+                    await self.clean_up(x[0], x[1])
+            await asyncio.sleep(5)
 
     async def clear(self):
         while True:
@@ -137,9 +138,6 @@ class core():
     async def update_expection_list(self):
         while True:
             try:
-                server_reader = None
-                server_writer = None
-                file = None
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
                                                                              ssl=self.context,
@@ -170,9 +168,9 @@ class core():
                     file = open(self.config['china_list'], 'wb')
                     file.write(customize)
                     file.close()
-                self.clean_up(server_writer, file)
+                await self.clean_up(server_writer, file)
             except Exception:
-                self.clean_up(server_writer, file)
+                await self.clean_up(server_writer, file)
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):

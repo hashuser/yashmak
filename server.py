@@ -25,7 +25,6 @@ class core():
 
     async def handler(self, client_reader, client_writer):
         try:
-            server_writer = None
             uuid = await asyncio.wait_for(client_reader.read(36), 20)
             if uuid not in self.config['uuid']:
                 client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
@@ -34,35 +33,34 @@ class core():
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await asyncio.wait_for(client_reader.read(2), 20)), 'big', signed=True)
+                data = int.from_bytes((await client_reader.readexactly(2)), 'big', signed=True)
                 if data > 0:
                     data = await asyncio.wait_for(client_reader.read(data), 20)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
-                    await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                         self.switch(server_reader, client_writer, server_writer))
+                    tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                                 self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
         except Exception:
-            self.clean_up(client_writer, server_writer)
+            await self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await asyncio.wait_for(reader.read(16384), 300)
+                data = await reader.read(16384)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
                     break
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
         except Exception:
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
 
     async def updater(self, writer, uuid):
         try:
-            file = None
             if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
                 file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'rb')
                 content = file.read()
@@ -72,17 +70,22 @@ class core():
             else:
                 writer.write(b'\n')
                 await writer.drain()
-            self.clean_up(writer, file)
+            await self.clean_up(writer, file)
         except Exception:
-            self.clean_up(writer, file)
+            await self.clean_up(writer, file)
 
-    def clean_up(self, writer1, writer2):
+    async def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
         except Exception:
             pass
         try:
             writer2.close()
+        except Exception:
+            pass
+        try:
+            for x in tasks:
+                x.cancel()
         except Exception:
             pass
 
