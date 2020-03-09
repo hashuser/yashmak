@@ -1,7 +1,6 @@
 import asyncio
 import socket
 import ssl
-import gc
 import json
 import os
 import sys
@@ -19,17 +18,19 @@ class core():
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024)
         self.context = self.get_context()
         self.connection_pool = []
+        self.locked = False
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.pool())
         self.loop.create_task(self.pool_health())
         self.loop.create_task(self.update_expection_list())
-        self.loop.create_task(self.clear())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
         try:
-            data = await asyncio.wait_for(client_reader.read(65535), 20)
+            server_writer = None
+            tasks = None
+            data = await client_reader.read(65535)
             if data == b'':
                 raise Exception
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
@@ -38,7 +39,7 @@ class core():
             tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
         except Exception:
-            await self.clean_up(client_writer, server_writer, tasks)
+            self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
@@ -48,43 +49,47 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            await self.clean_up(writer, other)
+            self.clean_up(writer, other)
         except Exception:
-            await self.clean_up(writer, other)
+            self.clean_up(writer, other)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
-        if type:
-            if self.connection_pool == []:
-                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                             port=self.config['port'],
-                                                                             ssl=self.context,
-                                                                             server_hostname=self.config['host'])
-                server_writer.write(self.config['uuid'])
+        server_writer = None
+        try:
+            if type:
+                if self.connection_pool == []:
+                    server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                                 port=self.config['port'],
+                                                                                 ssl=self.context,
+                                                                                 server_hostname=self.config['host'])
+                    server_writer.write(self.config['uuid'])
+                    await server_writer.drain()
+                else:
+                    server_reader, server_writer = self.connection_pool.pop(0)
+                server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
+                await server_writer.drain()
+                server_writer.write(host + b'\n' + port + b'\n')
                 await server_writer.drain()
             else:
-                server_reader, server_writer = self.connection_pool.pop(0)
-            server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
-            await server_writer.drain()
-            server_writer.write(host + b'\n' + port + b'\n')
-            await server_writer.drain()
-        else:
-            address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
-            if address[0] != '127.0.0.1':
-                server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
-            else:
-                if not request_type:
-                    client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
-                    await client_writer.drain()
-                raise Exception
-        if not request_type:
-            client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
-            await client_writer.drain()
-        elif data != None:
-            server_writer.write(data)
-            await server_writer.drain()
-        return server_reader, server_writer
+                address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
+                if address[0] != '127.0.0.1':
+                    server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+                else:
+                    if not request_type:
+                        client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
+                        await client_writer.drain()
+                    raise Exception
+            if not request_type:
+                client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
+                await client_writer.drain()
+            elif data != None:
+                server_writer.write(data)
+                await server_writer.drain()
+            return server_reader, server_writer
+        except Exception:
+            self.clean_up(client_writer, server_writer)
 
-    async def clean_up(self, writer1=None, writer2=None, tasks=None):
+    def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
         except Exception:
@@ -102,7 +107,7 @@ class core():
     async def pool(self):
         pool_max_size = 4
         while True:
-            while len(self.connection_pool) < pool_max_size:
+            while len(self.connection_pool) < pool_max_size and not self.locked:
                 try:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
@@ -116,28 +121,25 @@ class core():
             await asyncio.sleep(1)
             if len(self.connection_pool) < (pool_max_size / 2):
                 pool_max_size *= 2
-            print('现有连接:',len(self.connection_pool),'最大连接数:',pool_max_size)
 
     async def pool_health(self):
         while True:
+            self.locked = True
             for x in self.connection_pool:
                 try:
                     x[1].write(int.to_bytes(0, 2, 'big', signed=True))
                     await x[1].drain()
                 except Exception:
-                    print('连接失效，已在清除')
                     self.connection_pool.remove(x)
-                    await self.clean_up(x[0], x[1])
+                    self.clean_up(x[0], x[1])
+            self.locked = False
             await asyncio.sleep(5)
-
-    async def clear(self):
-        while True:
-            gc.collect()
-            await asyncio.sleep(60)
 
     async def update_expection_list(self):
         while True:
             try:
+                server_writer = None
+                file = None
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
                                                                              ssl=self.context,
@@ -148,7 +150,7 @@ class core():
                 await server_writer.drain()
                 customize = b''
                 while True:
-                    data = await server_reader.read(16384)
+                    data = await server_reader.read(8192)
                     if data == b'' or data == b'\n':
                         break
                     customize += data
@@ -168,9 +170,9 @@ class core():
                     file = open(self.config['china_list'], 'wb')
                     file.write(customize)
                     file.close()
-                await self.clean_up(server_writer, file)
+                self.clean_up(server_writer, file)
             except Exception:
-                await self.clean_up(server_writer, file)
+                self.clean_up(server_writer, file)
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):
@@ -215,7 +217,7 @@ class core():
         else:
             client_writer.write(b'\x05\x00')
             await client_writer.drain()
-            data = await asyncio.wait_for(client_reader.read(16384), 20)
+            data = await client_reader.read(65535)
             if data[3] == 1:
                 host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
                 port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')

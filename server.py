@@ -1,11 +1,11 @@
 import asyncio
 import socket
 import ssl
-import gc
 import json
 import os
 import sys
 import ipaddress
+import time
 
 class core():
     def __init__(self):
@@ -17,47 +17,55 @@ class core():
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
+        self.connection_pool = dict()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
-        self.loop.create_task(self.clear())
+        self.loop.create_task(self.pool_health())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
         try:
-            uuid = await asyncio.wait_for(client_reader.read(36), 20)
+            server_writer = None
+            tasks = None
+            self.update_TTL(client_writer)
+            uuid = await client_reader.read(36)
+            self.update_TTL(client_writer)
             if uuid not in self.config['uuid']:
                 client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
                 await client_writer.drain()
-                client_writer.close()
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await client_reader.readexactly(2)), 'big', signed=True)
+                data = int.from_bytes((await client_reader.readexactly(2)), 'big',signed=True)
+                self.update_TTL(client_writer)
                 if data > 0:
-                    data = await asyncio.wait_for(client_reader.read(data), 20)
+                    data = await client_reader.readexactly(data)
+                    self.update_TTL(client_writer)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+                    self.update_TTL(server_writer)
                     tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                                  self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
         except Exception:
-            await self.clean_up(client_writer, server_writer, tasks)
+            self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
             while True:
                 data = await reader.read(16384)
                 writer.write(data)
+                self.update_TTL(writer)
                 await writer.drain()
                 if data == b'':
                     break
-            await self.clean_up(writer, other)
+            self.clean_up(writer, other)
         except Exception:
-            await self.clean_up(writer, other)
+            self.clean_up(writer, other)
 
     async def updater(self, writer, uuid):
         try:
@@ -70,11 +78,29 @@ class core():
             else:
                 writer.write(b'\n')
                 await writer.drain()
-            await self.clean_up(writer, file)
+            self.clean_up(writer, file)
         except Exception:
-            await self.clean_up(writer, file)
+            self.clean_up(writer, file)
 
-    async def clean_up(self, writer1=None, writer2=None, tasks=None):
+    def update_TTL(self,x):
+        try:
+            self.connection_pool[x] = time.time()
+        except Exception:
+            pass
+
+    async def pool_health(self):
+        while True:
+            for x in list(self.connection_pool.keys()):
+                try:
+                    if time.time() - self.connection_pool[x] > 60:
+                        self.clean_up(self.connection_pool[x])
+                        del self.connection_pool[x]
+                except Exception:
+                    print('NO')
+            self.connection_pool = dict(self.connection_pool)
+            await asyncio.sleep(60)
+
+    def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
         except Exception:
@@ -88,6 +114,7 @@ class core():
                 x.cancel()
         except Exception:
             pass
+
 
     def exception_handler(self, loop, context):
         pass
@@ -142,7 +169,7 @@ class core():
 
     async def clear(self):
         while True:
-            gc.collect()
+            print(gc.collect())
             await asyncio.sleep(60)
 
     def conclude(self, data):
