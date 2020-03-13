@@ -4,6 +4,7 @@ import ssl
 import json
 import os
 import sys
+import traceback
 
 
 class core():
@@ -38,8 +39,9 @@ class core():
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
             tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
-        except Exception:
-            self.clean_up(client_writer, server_writer, tasks)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
@@ -49,9 +51,10 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            self.clean_up(writer, other)
-        except Exception:
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(writer, other)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         server_writer = None
@@ -86,26 +89,30 @@ class core():
                 server_writer.write(data)
                 await server_writer.drain()
             return server_reader, server_writer
-        except Exception:
-            self.clean_up(client_writer, server_writer)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(client_writer, server_writer)
 
-    def clean_up(self, writer1=None, writer2=None, tasks=None):
+    async def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
-        except Exception:
-            pass
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
         try:
             writer2.close()
-        except Exception:
-            pass
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
         try:
             for x in tasks:
-                x.cancel()
-        except Exception:
-            pass
+                try:
+                    x.cancel()
+                except Exception as e:
+                    traceback.clear_frames(e.__traceback__)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
 
     async def pool(self):
-        pool_max_size = 4
+        pool_max_size = 8
         while True:
             while len(self.connection_pool) < pool_max_size and not self.locked:
                 try:
@@ -116,11 +123,11 @@ class core():
                     server_writer.write(self.config['uuid'])
                     await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
-                except Exception:
-                   pass
+                except Exception as e:
+                   traceback.clear_frames(e.__traceback__)
             await asyncio.sleep(1)
             if len(self.connection_pool) < (pool_max_size / 2):
-                pool_max_size *= 2
+                pool_max_size *= 1
 
     async def pool_health(self):
         while True:
@@ -129,9 +136,10 @@ class core():
                 try:
                     x[1].write(int.to_bytes(0, 2, 'big', signed=True))
                     await x[1].drain()
-                except Exception:
+                except Exception as e:
+                    traceback.clear_frames(e.__traceback__)
                     self.connection_pool.remove(x)
-                    self.clean_up(x[0], x[1])
+                    await self.clean_up(x[0], x[1])
             self.locked = False
             await asyncio.sleep(5)
 
@@ -170,9 +178,10 @@ class core():
                     file = open(self.config['china_list'], 'wb')
                     file.write(customize)
                     file.close()
-                self.clean_up(server_writer, file)
-            except Exception:
-                self.clean_up(server_writer, file)
+                await self.clean_up(server_writer, file)
+            except Exception as e:
+                traceback.clear_frames(e.__traceback__)
+                await self.clean_up(server_writer, file)
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):

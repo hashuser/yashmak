@@ -6,6 +6,7 @@ import os
 import sys
 import ipaddress
 import time
+import traceback
 
 class core():
     def __init__(self):
@@ -51,8 +52,9 @@ class core():
                                                  self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
-        except Exception:
-            self.clean_up(client_writer, server_writer, tasks)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(client_writer, server_writer, tasks)
 
     async def switch(self, reader, writer, other):
         try:
@@ -63,9 +65,10 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            self.clean_up(writer, other)
-        except Exception:
-            self.clean_up(writer, other)
+            await self.clean_up(writer, other)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(writer, other)
 
     async def updater(self, writer, uuid):
         try:
@@ -78,42 +81,46 @@ class core():
             else:
                 writer.write(b'\n')
                 await writer.drain()
-            self.clean_up(writer, file)
-        except Exception:
-            self.clean_up(writer, file)
+            await self.clean_up(writer, file)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            await self.clean_up(writer, file)
 
     def update_TTL(self,x):
         try:
             self.connection_pool[x] = time.time()
-        except Exception:
-            pass
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
 
     async def pool_health(self):
         while True:
             for x in list(self.connection_pool.keys()):
                 try:
                     if time.time() - self.connection_pool[x] > 60:
-                        self.clean_up(self.connection_pool[x])
+                        await self.clean_up(x)
                         del self.connection_pool[x]
-                except Exception:
-                    print('NO')
+                except Exception as e:
+                    traceback.clear_frames(e.__traceback__)
             self.connection_pool = dict(self.connection_pool)
             await asyncio.sleep(60)
 
-    def clean_up(self, writer1=None, writer2=None, tasks=None):
+    async def clean_up(self, writer1=None, writer2=None, tasks=None):
         try:
             writer1.close()
-        except Exception:
-            pass
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
         try:
             writer2.close()
-        except Exception:
-            pass
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
         try:
             for x in tasks:
-                x.cancel()
-        except Exception:
-            pass
+                try:
+                    x.cancel()
+                except Exception as e:
+                    traceback.clear_frames(e.__traceback__)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
 
 
     def exception_handler(self, loop, context):
