@@ -44,8 +44,21 @@ cert(){
   echo 01 > ./demoCA/serial
   wget -O ./demoCA/conf/ca.conf https://raw.githubusercontent.com/hashuser/yashmak/master/ca.conf
   wget -O ./server/conf/server.conf https://raw.githubusercontent.com/hashuser/yashmak/master/server.conf
-  local_ip=`curl -4 ip.sb`
-  echo "IP.1 = $local_ip" >> ./server/conf/server.conf
+  local_ipv4=`curl -4 ip.sb`
+  if [ $? -ne 0 ]; then
+    local_ipv6=`curl -6 ip.sb`
+    if [ $? -ne 0 ]; then
+      exit 1
+    else
+      echo "IP.1 = $local_ipv6" >> ./server/conf/server.conf
+    fi
+  else
+    echo "IP.1 = $local_ipv4" >> ./server/conf/server.conf
+    local_ipv6=`curl -6 ip.sb`
+    if [ $? -eq 0 ]; then
+      echo "IP.2 = $local_ipv6" >> ./server/conf/server.conf
+    fi
+  fi
   sed -i 's^RANDFILE		= $ENV::HOME/.rnd^# RANDFILE		= $ENV::HOME/.rnd^' /etc/ssl/openssl.cnf
   sed -i "s/O=Yashmak/O=$uuid/" ./demoCA/conf/ca.conf
   sed -i "s/CN=GlobalSign/CN=$local_ip/" ./server/conf/server.conf
@@ -55,6 +68,12 @@ cert(){
   openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf
   openssl req -new -key ./server/private/server.key -out ./server/request/server.csr -config ./server/conf/server.conf
   openssl ca -batch -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf
+}
+
+crontab(){
+  apt-get install cron -y
+  echo "0 12 * * * root reboot" >> /etc/crontab
+  service cron restart
 }
 
 main(){
