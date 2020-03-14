@@ -51,9 +51,11 @@ cert(){
       exit 1
     else
       echo "IP.1 = $local_ipv6" >> ./server/conf/server.conf
+      sed -i "s/CN=GlobalSign/CN=$local_ipv6/" ./server/conf/server.conf
     fi
   else
     echo "IP.1 = $local_ipv4" >> ./server/conf/server.conf
+    sed -i "s/CN=GlobalSign/CN=$local_ipv4/" ./server/conf/server.conf
     local_ipv6=`curl -6 ip.sb`
     if [ $? -eq 0 ]; then
       echo "IP.2 = $local_ipv6" >> ./server/conf/server.conf
@@ -61,7 +63,6 @@ cert(){
   fi
   sed -i 's^RANDFILE		= $ENV::HOME/.rnd^# RANDFILE		= $ENV::HOME/.rnd^' /etc/ssl/openssl.cnf
   sed -i "s/O=Yashmak/O=$uuid/" ./demoCA/conf/ca.conf
-  sed -i "s/CN=GlobalSign/CN=$local_ip/" ./server/conf/server.conf
   sed -i "s/O=Yashmak/O=$uuid/" ./server/conf/server.conf
   openssl ecparam -genkey -name prime256v1 -out ./demoCA/private/cakey.pem
   openssl ecparam -genkey -name prime256v1 -out ./server/private/server.key
