@@ -101,14 +101,14 @@ class core():
         while True:
             for x in list(self.connection_pool.keys()):
                 try:
-                    if time.time() - self.connection_pool[x] > 10:
+                    if time.time() - self.connection_pool[x] > 60:
                         await self.clean_up(x)
                         del self.connection_pool[x]
                 except Exception as e:
                     traceback.clear_frames(e.__traceback__)
                     e.__traceback__ = None
             self.connection_pool = dict(self.connection_pool)
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
 
     async def clean_up(self, writer1=None, writer2=None):
         try:
