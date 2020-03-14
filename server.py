@@ -38,10 +38,10 @@ class core():
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await client_reader.read(2)), 'big',signed=True)
+                data = int.from_bytes((await client_reader.readexactly(2)), 'big',signed=True)
                 self.update_TTL(client_writer)
                 if data > 0:
-                    data = await client_reader.read(data)
+                    data = await client_reader.readexactly(data)
                     self.update_TTL(client_writer)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
@@ -101,14 +101,14 @@ class core():
         while True:
             for x in list(self.connection_pool.keys()):
                 try:
-                    if time.time() - self.connection_pool[x] > 60:
+                    if time.time() - self.connection_pool[x] > 10:
                         await self.clean_up(x)
                         del self.connection_pool[x]
                 except Exception as e:
                     traceback.clear_frames(e.__traceback__)
                     e.__traceback__ = None
             self.connection_pool = dict(self.connection_pool)
-            await asyncio.sleep(60)
+            await asyncio.sleep(5)
 
     async def clean_up(self, writer1=None, writer2=None):
         try:
@@ -125,7 +125,7 @@ class core():
             e.__traceback__ = None
 
     def exception_handler(self, loop, context):
-        print(context)
+        pass
 
     def process(self, data):
         return self.get_address(data)
