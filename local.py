@@ -6,7 +6,6 @@ import os
 import sys
 import traceback
 
-
 class core():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
@@ -37,11 +36,12 @@ class core():
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
-            tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                         self.switch(server_reader, client_writer, server_writer))
+            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                 self.switch(server_reader, client_writer, server_writer))
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
-            await self.clean_up(client_writer, server_writer, tasks)
+            e.__traceback__ = None
+            await self.clean_up(client_writer, server_writer)
 
     async def switch(self, reader, writer, other):
         try:
@@ -54,6 +54,7 @@ class core():
             await self.clean_up(writer, other)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
             await self.clean_up(writer, other)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
@@ -91,25 +92,22 @@ class core():
             return server_reader, server_writer
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
-    async def clean_up(self, writer1=None, writer2=None, tasks=None):
+    async def clean_up(self, writer1=None, writer2=None):
         try:
             writer1.close()
+            await writer1.wait_closed()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
         try:
             writer2.close()
+            await writer2.wait_closed()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
-        try:
-            for x in tasks:
-                try:
-                    x.cancel()
-                except Exception as e:
-                    traceback.clear_frames(e.__traceback__)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
 
     async def pool(self):
         pool_max_size = 8
@@ -125,6 +123,7 @@ class core():
                     self.connection_pool.append((server_reader, server_writer))
                 except Exception as e:
                    traceback.clear_frames(e.__traceback__)
+                   e.__traceback__ = None
             await asyncio.sleep(1)
             if len(self.connection_pool) < (pool_max_size / 2):
                 pool_max_size *= 1
@@ -138,6 +137,7 @@ class core():
                     await x[1].drain()
                 except Exception as e:
                     traceback.clear_frames(e.__traceback__)
+                    e.__traceback__ = None
                     self.connection_pool.remove(x)
                     await self.clean_up(x[0], x[1])
             self.locked = False
@@ -181,6 +181,7 @@ class core():
                 await self.clean_up(server_writer, file)
             except Exception as e:
                 traceback.clear_frames(e.__traceback__)
+                e.__traceback__ = None
                 await self.clean_up(server_writer, file)
             await asyncio.sleep(60)
 
@@ -326,7 +327,6 @@ class yashmak(core):
 
     def encode(self, data):
         return data.encode('utf-8')
-
 
 if __name__ == '__main__':
     server = yashmak()

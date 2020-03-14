@@ -38,23 +38,24 @@ class core():
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await client_reader.readexactly(2)), 'big',signed=True)
+                data = int.from_bytes((await client_reader.read(2)), 'big',signed=True)
                 self.update_TTL(client_writer)
                 if data > 0:
-                    data = await client_reader.readexactly(data)
+                    data = await client_reader.read(data)
                     self.update_TTL(client_writer)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
                     self.update_TTL(server_writer)
-                    tasks = await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                                 self.switch(server_reader, client_writer, server_writer))
+                    await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                         self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
-            await self.clean_up(client_writer, server_writer, tasks)
+            e.__traceback__ = None
+            await self.clean_up(client_writer, server_writer)
 
     async def switch(self, reader, writer, other):
         try:
@@ -65,9 +66,11 @@ class core():
                 await writer.drain()
                 if data == b'':
                     break
-            await self.clean_up(writer, other)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(writer, other)
+        finally:
             await self.clean_up(writer, other)
 
     async def updater(self, writer, uuid):
@@ -84,6 +87,7 @@ class core():
             await self.clean_up(writer, file)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
             await self.clean_up(writer, file)
 
     def update_TTL(self,x):
@@ -91,6 +95,7 @@ class core():
             self.connection_pool[x] = time.time()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
 
     async def pool_health(self):
         while True:
@@ -101,30 +106,26 @@ class core():
                         del self.connection_pool[x]
                 except Exception as e:
                     traceback.clear_frames(e.__traceback__)
+                    e.__traceback__ = None
             self.connection_pool = dict(self.connection_pool)
             await asyncio.sleep(60)
 
-    async def clean_up(self, writer1=None, writer2=None, tasks=None):
+    async def clean_up(self, writer1=None, writer2=None):
         try:
             writer1.close()
+            await writer1.wait_closed()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
         try:
             writer2.close()
+            await writer2.wait_closed()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
-        try:
-            for x in tasks:
-                try:
-                    x.cancel()
-                except Exception as e:
-                    traceback.clear_frames(e.__traceback__)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-
+            e.__traceback__ = None
 
     def exception_handler(self, loop, context):
-        pass
+        print(context)
 
     def process(self, data):
         return self.get_address(data)
@@ -172,11 +173,6 @@ class core():
                 file = open(self.local_path + '/' + x.decode('utf-8') + '.txt', 'w')
                 json.dump(list(map(encode,list(self.host_list[x]))), file)
                 file.close()
-            await asyncio.sleep(60)
-
-    async def clear(self):
-        while True:
-            print(gc.collect())
             await asyncio.sleep(60)
 
     def conclude(self, data):
