@@ -95,6 +95,7 @@ main(){
   bbr
   cert
   conf
+  crontab
 }
 
 main
