@@ -7,6 +7,7 @@ import sys
 import ipaddress
 import time
 import traceback
+import objgraph
 
 class core():
     def __init__(self):
@@ -18,36 +19,40 @@ class core():
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
-        self.connection_pool = dict()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
-        self.loop.create_task(self.pool_health())
+        self.loop.create_task(self.logging())
         self.loop.run_forever()
+
+    async def logging(self):
+        while True:
+            file = open('logging.txt', 'a+')
+            file.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())+'\n')
+            for x in objgraph.most_common_types(10):
+                file.write(x[0]+':'+str(x[1])+'\n')
+            file.write('---------------------------------\n')
+            file.close()
+            await asyncio.sleep(60)
 
     async def handler(self, client_reader, client_writer):
         try:
             server_writer = None
             tasks = None
-            self.update_TTL(client_writer)
-            uuid = await client_reader.read(36)
-            self.update_TTL(client_writer)
+            uuid = await asyncio.wait_for(client_reader.read(36),20)
             if uuid not in self.config['uuid']:
                 client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
                 await client_writer.drain()
                 raise Exception
             data = 0
             while data == 0:
-                data = int.from_bytes((await client_reader.readexactly(2)), 'big',signed=True)
-                self.update_TTL(client_writer)
+                data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),20)), 'big',signed=True)
                 if data > 0:
-                    data = await client_reader.readexactly(data)
-                    self.update_TTL(client_writer)
+                    data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
-                    self.update_TTL(server_writer)
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
@@ -62,7 +67,6 @@ class core():
             while True:
                 data = await reader.read(16384)
                 writer.write(data)
-                self.update_TTL(writer)
                 await writer.drain()
                 if data == b'':
                     break
@@ -89,26 +93,6 @@ class core():
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
             await self.clean_up(writer, file)
-
-    def update_TTL(self,x):
-        try:
-            self.connection_pool[x] = time.time()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
-
-    async def pool_health(self):
-        while True:
-            for x in list(self.connection_pool.keys()):
-                try:
-                    if time.time() - self.connection_pool[x] > 60:
-                        await self.clean_up(x)
-                        del self.connection_pool[x]
-                except Exception as e:
-                    traceback.clear_frames(e.__traceback__)
-                    e.__traceback__ = None
-            self.connection_pool = dict(self.connection_pool)
-            await asyncio.sleep(30)
 
     async def clean_up(self, writer1=None, writer2=None):
         try:

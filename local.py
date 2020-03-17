@@ -30,7 +30,7 @@ class core():
         try:
             server_writer = None
             tasks = None
-            data = await client_reader.read(65535)
+            data = await asyncio.wait_for(client_reader.read(65535),20)
             if data == b'':
                 raise Exception
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
@@ -110,7 +110,7 @@ class core():
             e.__traceback__ = None
 
     async def pool(self):
-        pool_max_size = 8
+        pool_max_size = 1024
         while True:
             while len(self.connection_pool) < pool_max_size and not self.locked:
                 try:
@@ -227,7 +227,7 @@ class core():
         else:
             client_writer.write(b'\x05\x00')
             await client_writer.drain()
-            data = await client_reader.read(65535)
+            data = await asyncio.wait_for(client_reader.read(65535),20)
             if data[3] == 1:
                 host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
                 port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
