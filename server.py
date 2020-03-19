@@ -5,9 +5,7 @@ import json
 import os
 import sys
 import ipaddress
-import time
 import traceback
-import objgraph
 
 class core():
     def __init__(self):
@@ -22,18 +20,7 @@ class core():
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
-        self.loop.create_task(self.logging())
         self.loop.run_forever()
-
-    async def logging(self):
-        while True:
-            file = open('logging.txt', 'a+')
-            file.write(time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())+'\n')
-            for x in objgraph.most_common_types(10):
-                file.write(x[0]+':'+str(x[1])+'\n')
-            file.write('---------------------------------\n')
-            file.close()
-            await asyncio.sleep(60)
 
     async def handler(self, client_reader, client_writer):
         try:
