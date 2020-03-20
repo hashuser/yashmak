@@ -44,6 +44,8 @@ class core():
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
                     await self.updater(client_writer, uuid)
+                elif data == -2:
+                    await self.TCP_ping(client_writer, client_reader)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
@@ -64,8 +66,22 @@ class core():
         finally:
             await self.clean_up(writer, other)
 
+    async def TCP_ping(self, writer, reader):
+        try:
+            time = await asyncio.wait_for(reader.read(8), 20)
+            writer.write(time)
+            await writer.drain()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(writer)
+        finally:
+            await self.clean_up(writer)
+
     async def updater(self, writer, uuid):
         try:
+            if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
+                raise Exception
             if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
                 file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'rb')
                 content = file.read()
@@ -75,10 +91,11 @@ class core():
             else:
                 writer.write(b'\n')
                 await writer.drain()
-            await self.clean_up(writer, file)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
+            await self.clean_up(writer, file)
+        finally:
             await self.clean_up(writer, file)
 
     async def clean_up(self, writer1=None, writer2=None):
@@ -190,7 +207,7 @@ class yashmak(core):
             file.close()
             content = self.translate(content)
             self.config = json.loads(content)
-            self.config['uuid'] = set(list(map(self.encode, self.config['uuid'])))
+            self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'geoip': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
@@ -217,6 +234,12 @@ class yashmak(core):
                 data = list(map(self.encode, data))
                 for y in data:
                     self.host_list[x].add(y.replace(b'*', b''))
+
+    def UUID_detect(self, UUIDs):
+        for x in UUIDs:
+            if len(x) != 36:
+                raise Exception
+        return UUIDs
 
     def translate(self, content):
         return content.replace('\\', '/')
