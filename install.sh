@@ -81,7 +81,7 @@ sign_cert(){
   mv ./server/server.crt ./Certs
   rm -rf ./demoCA
   rm -rf ./server
-  chmod 600 ./Certs
+  chmod 640 ./Certs
   chmod 644 ./Cache
 }
 
