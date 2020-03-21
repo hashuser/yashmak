@@ -81,7 +81,7 @@ sign_cert(){
   mv ./server/server.crt ./Certs
   rm -rf ./demoCA
   rm -rf ./server
-  chmod 640 ./Certs
+  chmod 644 ./Certs
   chmod 644 ./Cache
 }
 
@@ -93,6 +93,7 @@ automatic_reboot(){
 
 install_Yashmak(){
   mkdir $(cd "$(dirname "$0")";pwd)/Yashmak
+  chmod 744 ./Yashmak
   cd $(cd "$(dirname "$0")";pwd)/Yashmak
   mkdir ./Cache
   apt-get update
