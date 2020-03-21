@@ -82,8 +82,8 @@ class core():
         try:
             if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
                 raise Exception
-            if os.path.exists(self.local_path + '/' + uuid.decode('utf-8') + '.txt'):
-                file = open(self.local_path + '/' + uuid.decode('utf-8') + '.txt', 'rb')
+            if os.path.exists(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt'):
+                file = open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt', 'rb')
                 content = file.read()
                 file.close()
                 writer.write(content)
@@ -158,7 +158,7 @@ class core():
             return host.decode('utf-8')
         while True:
             for x in self.host_list:
-                file = open(self.local_path + '/' + x.decode('utf-8') + '.txt', 'w')
+                file = open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'w')
                 json.dump(list(map(encode,list(self.host_list[x]))), file)
                 file.close()
             await asyncio.sleep(60)
@@ -227,8 +227,8 @@ class yashmak(core):
         self.exception_list_name.add(b'foreign')
         for x in self.exception_list_name:
             self.host_list[x] = set()
-            if os.path.exists(self.local_path + '/' + x.decode('utf-8') + '.txt'):
-                file = open(self.local_path + '/' + x.decode('utf-8') + '.txt', 'r')
+            if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt'):
+                file = open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'r')
                 data = json.load(file)
                 file.close()
                 data = list(map(self.encode, data))
