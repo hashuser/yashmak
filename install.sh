@@ -101,6 +101,7 @@ install_Yashmak(){
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O foreign.txt https://raw.githubusercontent.com/hashuser/yashmak/master/foreign.txt
   wget -O geoip.txt https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.txt
+  wget -O blacklist.txt https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.txt
 }
 
 main(){
