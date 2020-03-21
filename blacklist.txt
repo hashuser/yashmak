@@ -1,0 +1,7 @@
+{
+    "tag": {
+        "religion": "https://baike.baidu.com/item/%E9%82%AA%E6%95%99/263551?fr=aladdin"
+    },
+    "*.falundafa.org": "religion",
+    "*.epochtimes.com": "religion"
+}

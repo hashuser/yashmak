@@ -37,6 +37,7 @@ class core():
                 if data > 0:
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
+                    await self.redirect(client_writer, host, uuid)
                     address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
                     self.is_china_ip(address[0], host, uuid)
                     server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
@@ -76,6 +77,23 @@ class core():
             e.__traceback__ = None
             await self.clean_up(writer)
         finally:
+            await self.clean_up(writer)
+
+    async def redirect(self, writer, host, uuid):
+        try:
+            URL = self.host_list[b'blacklist'][self.is_banned(host, uuid)]
+            if URL != None:
+                if URL[0:4] != b'http' and URL in self.host_list[b'blacklist']['tag']:
+                    URL = self.host_list[b'blacklist']['tag'][URL]
+                if URL[0:4] == b'http':
+                    writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+                else:
+                    writer.write(b'''HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n''')
+                await writer.drain()
+                await self.clean_up(writer)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
             await self.clean_up(writer)
 
     async def updater(self, writer, uuid):
@@ -125,7 +143,7 @@ class core():
         port = data[position:data.find(b'\n', position)]
         return host, port
 
-    def is_china_ip(self,ip ,host, uuid):
+    def is_china_ip(self, ip, host, uuid):
         for x in [b'foreign',uuid]:
             if host in self.host_list[x]:
                 return False
@@ -144,6 +162,18 @@ class core():
                 return True
         self.add_host(self.conclude(host), b'foreign')
         return False
+
+    def is_banned(self, host, uuid):
+        if host in self.host_list[b'blacklist']:
+            return host
+        sigment_length = len(host)
+        while True:
+            sigment_length = host.rfind(b'.', 0, sigment_length) - 1
+            if sigment_length <= -1:
+                break
+            if host[sigment_length + 1:] in self.host_list[b'blacklist']:
+                return host[sigment_length + 1:]
+        return None
 
     def add_host(self, host, uuid):
         if uuid in self.host_list:
@@ -210,7 +240,7 @@ class yashmak(core):
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'geoip': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
+            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
             file = open(self.local_path + '/config.json', 'w')
             json.dump(example, file, indent=4)
             file.close()
@@ -234,6 +264,20 @@ class yashmak(core):
                 data = list(map(self.encode, data))
                 for y in data:
                     self.host_list[x].add(y.replace(b'*', b''))
+        file = open(self.config['blacklist'], 'r')
+        data = json.load(file)
+        file.close()
+        for key in list(data):
+            if key != 'tag':
+                value = data[key].encode('utf-8')
+                del data[key]
+                data[key.replace('*', '').encode('utf-8')] = value
+        for key in list(data['tag']):
+            value = data['tag'][key].encode('utf-8')
+            del data['tag'][key]
+            data['tag'][key.replace('*', '').encode('utf-8')] = value
+        data[None] = None
+        self.host_list[b'blacklist'] = data
 
     def UUID_detect(self, UUIDs):
         for x in UUIDs:
