@@ -80,6 +80,7 @@ crontab(){
 main(){
   mkdir $(cd "$(dirname "$0")";pwd)/Yashmak
   cd $(cd "$(dirname "$0")";pwd)/Yashmak
+  mkdir $(cd "$(dirname "$0")";pwd)/Cache
   apt-get update
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
