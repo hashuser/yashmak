@@ -1,5 +1,5 @@
 #!/bin/bash
-service(){
+create_service(){
   touch $(cd "$(dirname "$0")";pwd)/Yashmak.service
   cat>$(cd "$(dirname "$0")";pwd)/Yashmak.service<<EOF
   [Unit]
@@ -20,19 +20,25 @@ service(){
 EOF
 }
 
-conf(){
+install_service(){
+  mv $(cd "$(dirname "$0")";pwd)/Yashmak.service /etc/systemd/system/
+  systemctl enable Yashmak.service
+  systemctl start Yashmak.service
+}
+
+create_shortcut(){
   echo "alias Yashmak_config='vim $(cd "$(dirname "$0")";pwd)/config.json'">>~/.bashrc
   echo "alias Yashmak_uninstall='rm -r $(cd "$(dirname "$0")";pwd)'">>~/.bashrc
   reboot
 }
 
-bbr(){
+open_bbr(){
   echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
   echo "net.ipv4.tcp_congestion_control=bbr" > /etc/sysctl.conf
   sysctl -p
 }
 
-cert(){
+sign_cert(){
   uuid=$(cat /proc/sys/kernel/random/uuid)
   uuid=${uuid:0:7}
   apt-get install openssl
@@ -69,18 +75,24 @@ cert(){
   openssl req -new -x509 -key ./demoCA/private/cakey.pem -out ./demoCA/cacert.pem -days 7300 -config ./demoCA/conf/ca.conf
   openssl req -new -key ./server/private/server.key -out ./server/request/server.csr -config ./server/conf/server.conf
   openssl ca -batch -in ./server/request/server.csr -out ./server/server.crt -days 3650 -extensions req_ext -extfile ./server/conf/server.conf
+  mkdir ./Certs
+  mv ./demoCA/cacert.pem ./Certs
+  mv ./server/private/server.key ./Certs
+  mv ./server/server.crt ./Certs
+  rm -rf ./demoCA
+  rm -rf ./server
 }
 
-crontab(){
+automatic_reboot(){
   apt-get install cron -y
   echo "0 12 * * * root reboot" >> /etc/crontab
   service cron restart
 }
 
-main(){
+install_Yashmak(){
   mkdir $(cd "$(dirname "$0")";pwd)/Yashmak
   cd $(cd "$(dirname "$0")";pwd)/Yashmak
-  mkdir $(cd "$(dirname "$0")";pwd)/Cache
+  mkdir ./Cache
   apt-get update
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
@@ -89,14 +101,16 @@ main(){
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O foreign.txt https://raw.githubusercontent.com/hashuser/yashmak/master/foreign.txt
   wget -O geoip.txt https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.txt
-  service
-  mv $(cd "$(dirname "$0")";pwd)/Yashmak.service /etc/systemd/system/
-  systemctl enable Yashmak.service
-  systemctl start Yashmak.service
-  bbr
-  cert
-  conf
-  crontab
+}
+
+main(){
+  install_Yashmak
+  create_service
+  install_service
+  open_bbr
+  sign_cert
+  automatic_reboot
+  create_shortcut
 }
 
 main
