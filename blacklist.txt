@@ -1,9 +1,32 @@
 {
     "tag": {
-        "religion": "https://baike.baidu.com/item/%E9%82%AA%E6%95%99/263551?fr=aladdin"
+        "cult": "https://baike.baidu.com/item/%E9%82%AA%E6%95%99/263551?fr=aladdin",
+        "propaganda": "https://baike.baidu.com/item/%E6%B4%97%E8%84%91/1509388"
     },
-    "*.falundafa.org": "religion",
-    "falundafa.org": "religion",
-    "*.epochtimes.com": "religion",
-    "epochtimes.com": "religion"
+    "*.falundafa.org": "cult",
+    "falundafa.org": "cult",
+    "*.epochtimes.com": "cult",
+    "epochtimes.com": "cult",
+    "*.minghui.org": "cult",
+    "minghui.org": "cult",
+    "*.kingdomsalvation.org": "cult",
+    "kingdomsalvation.org": "cult",
+    "*.pursuestar.com": "cult",
+    "pursuestar.com": "cult",
+    "*.godfootsteps.org": "cult",
+    "godfootsteps.org": "cult",
+    "*.zhengjian.org": "propaganda",
+    "zhengjian.org": "propaganda",
+    "*.zhuichaguoji.org": "propaganda",
+    "zhuichaguoji.org": "propaganda",
+    "*.bannedbook.org": "propaganda",
+    "bannedbook.org": "propaganda",
+    "*.yuanming.net": "propaganda",
+    "yuanming.net": "propaganda",
+    "*.zhenxiang.biz": "propaganda",
+    "zhenxiang.biz": "propaganda",
+    "*.dafahao.com": "propaganda",
+    "dafahao.com": "propaganda",
+    "*.bitterwinter.org": "propaganda",
+    "bitterwinter.org": "propaganda"
 }
