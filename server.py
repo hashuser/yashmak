@@ -6,6 +6,7 @@ import os
 import sys
 import ipaddress
 import traceback
+import gzip
 
 class core():
     def __init__(self):
@@ -44,9 +45,11 @@ class core():
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
-                    await self.updater(client_writer, uuid)
+                    await self.updater(client_writer, uuid, False)
                 elif data == -2:
                     await self.TCP_ping(client_writer, client_reader)
+                elif data == -3:
+                    await self.updater(client_writer, uuid, True)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
@@ -96,14 +99,15 @@ class core():
             e.__traceback__ = None
             await self.clean_up(writer)
 
-    async def updater(self, writer, uuid):
+    async def updater(self, writer, uuid, compress=False):
         try:
             if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
                 raise Exception
             if os.path.exists(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt'):
-                file = open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt', 'rb')
-                content = file.read()
-                file.close()
+                with open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt', 'rb') as file:
+                    content = file.read()
+                if compress:
+                    content = gzip.compress(content, gzip._COMPRESS_LEVEL_FAST)
                 writer.write(content)
                 await writer.drain()
             else:
@@ -188,9 +192,9 @@ class core():
             return host.decode('utf-8')
         while True:
             for x in self.host_list:
-                file = open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'w')
-                json.dump(list(map(encode,list(self.host_list[x]))), file)
-                file.close()
+                if x != b'blacklist':
+                    with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'w') as file:
+                        json.dump(list(map(encode, list(self.host_list[x]))), file)
             await asyncio.sleep(60)
 
     def conclude(self, data):
@@ -232,23 +236,20 @@ class yashmak(core):
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
         if os.path.exists(self.local_path + '/config.json'):
-            file = open(self.local_path + '/config.json', 'r')
-            content = file.read()
-            file.close()
+            with open(self.local_path + '/config.json', 'r') as file:
+                content = file.read()
             content = self.translate(content)
             self.config = json.loads(content)
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
-            file = open(self.local_path + '/config.json', 'w')
-            json.dump(example, file, indent=4)
-            file.close()
+            with open(self.local_path + '/config.json', 'w') as file:
+                json.dump(example, file, indent=4)
 
     def load_lists(self):
-        file = open(self.config['geoip'], 'r')
-        data = json.load(file)
-        file.close()
+        with open(self.config['geoip'], 'r') as file:
+            data = json.load(file)
         for x in data:
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
@@ -258,15 +259,13 @@ class yashmak(core):
         for x in self.exception_list_name:
             self.host_list[x] = set()
             if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt'):
-                file = open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'r')
-                data = json.load(file)
-                file.close()
+                with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'r') as file:
+                    data = json.load(file)
                 data = list(map(self.encode, data))
                 for y in data:
                     self.host_list[x].add(y.replace(b'*', b''))
-        file = open(self.config['blacklist'], 'r')
-        data = json.load(file)
-        file.close()
+        with open(self.config['blacklist'], 'r') as file:
+            data = json.load(file)
         for key in list(data):
             if key != 'tag':
                 value = data[key].encode('utf-8')

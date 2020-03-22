@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import traceback
+import gzip
 
 class core():
     def __init__(self):
@@ -155,7 +156,7 @@ class core():
                                                                              server_hostname=self.config['host'])
                 server_writer.write(self.config['uuid'])
                 await server_writer.drain()
-                server_writer.write(int.to_bytes(-1, 2, 'big', signed=True))
+                server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
                 await server_writer.drain()
                 customize = b''
                 while True:
@@ -164,21 +165,18 @@ class core():
                         break
                     customize += data
                 if os.path.exists(self.config['china_list']) and customize != b'':
-                    file = open(self.config['china_list'], 'r')
-                    data = json.load(file)
-                    file.close()
-                    customize = json.loads(customize)
+                    with open(self.config['china_list'], 'r') as file:
+                        data = json.load(file)
+                    customize = json.loads(gzip.decompress(customize))
                     data += customize
                     for x in list(map(self.encode, customize)):
                         self.exception_list.add(x.replace(b'*', b''))
                     data = list(set(data))
-                    file = open(self.config['china_list'], 'w')
-                    json.dump(data, file)
-                    file.close()
+                    with open(self.config['china_list'], 'w') as file:
+                        json.dump(data, file)
                 elif customize != b'':
-                    file = open(self.config['china_list'], 'wb')
-                    file.write(customize)
-                    file.close()
+                    with open(self.config['china_list'], 'wb') as file:
+                        file.write(customize)
                 await self.clean_up(server_writer, file)
             except Exception as e:
                 traceback.clear_frames(e.__traceback__)
@@ -285,9 +283,8 @@ class yashmak(core):
     def load_config(self):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
         if os.path.exists(self.config_path + 'config.json'):
-            file = open(self.config_path + 'config.json', 'r')
-            content = file.read()
-            file.close()
+            with open(self.config_path + 'config.json', 'r') as file:
+                content = file.read()
             content = self.translate(content)
             self.config = json.loads(content)
             self.config[self.config['active']]['mode'] = self.config['mode']
@@ -298,15 +295,13 @@ class yashmak(core):
         else:
             example = {'mode': '', 'active': '', 'china_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
-            file = open(self.config_path + 'config.json', 'w')
-            json.dump(example, file, indent=4)
-            file.close()
+            with open(self.config_path + 'config.json', 'w') as file:
+                json.dump(example, file, indent=4)
 
     def load_exception_list(self):
         if self.config['china_list'] != '':
-            file = open(self.config['china_list'], 'r')
-            data = json.load(file)
-            file.close()
+            with open(self.config['china_list'], 'r') as file:
+                data = json.load(file)
             data = list(map(self.encode,data))
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
@@ -326,9 +321,8 @@ class yashmak(core):
             os.popen('''networksetup -setproxybypassdomains "Ethernet" localhost 127.* 10.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 172.32.* 192.168.*''')
 
     def write_pid(self):
-        file = open(self.config_path + 'pid','w')
-        file.write(str(os.getpid()))
-        file.close()
+        with open(self.config_path + 'pid','w') as file:
+            file.write(str(os.getpid()))
 
     def translate(self, content):
         return content.replace('\\', '/')
