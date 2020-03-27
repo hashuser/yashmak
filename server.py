@@ -160,10 +160,17 @@ class core():
                     return False
         ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
-        for x in self.geoip_list:
-            if x[0] < ip and ip < x[1]:
+        left = 0
+        right = len(self.geoip_list)
+        while left <= right:
+            mid = left + (right - left) // 2
+            if self.geoip_list[mid][0] < ip and ip < self.geoip_list[mid][1]:
                 self.add_host(self.conclude(host), uuid)
                 return True
+            elif self.geoip_list[mid][1] < ip:
+                left = mid + 1
+            elif self.geoip_list[mid][0] > ip:
+                right = mid - 1
         self.add_host(self.conclude(host), b'foreign')
         return False
 
