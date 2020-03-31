@@ -148,20 +148,13 @@ class core():
         return host, port
 
     def is_china_ip(self, ip, host, uuid):
-        for x in [b'foreign',uuid]:
-            if host in self.host_list[x]:
+        for x in [b'google',b'youtube',b'wikipedia',b'twitter']:
+            if x in host:
                 return False
-            sigment_length = len(host)
-            while True:
-                sigment_length = host.rfind(b'.', 0, sigment_length) - 1
-                if sigment_length <= -1:
-                    break
-                if host[sigment_length + 1:] in self.host_list[x]:
-                    return False
         ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
         left = 0
-        right = len(self.geoip_list)
+        right = len(self.geoip_list) - 1
         while left <= right:
             mid = left + (right - left) // 2
             if self.geoip_list[mid][0] < ip and ip < self.geoip_list[mid][1]:
@@ -171,7 +164,6 @@ class core():
                 left = mid + 1
             elif self.geoip_list[mid][0] > ip:
                 right = mid - 1
-        self.add_host(self.conclude(host), b'foreign')
         return False
 
     def is_banned(self, host, uuid):
@@ -262,7 +254,6 @@ class yashmak(core):
             self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
         self.exception_list_name = self.config['uuid']
-        self.exception_list_name.add(b'foreign')
         for x in self.exception_list_name:
             self.host_list[x] = set()
             if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt'):
