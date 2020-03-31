@@ -157,7 +157,7 @@ class core():
         right = len(self.geoip_list) - 1
         while left <= right:
             mid = left + (right - left) // 2
-            if self.geoip_list[mid][0] < ip and ip < self.geoip_list[mid][1]:
+            if self.geoip_list[mid][0] <= ip and ip <= self.geoip_list[mid][1]:
                 self.add_host(self.conclude(host), uuid)
                 return True
             elif self.geoip_list[mid][1] < ip:
