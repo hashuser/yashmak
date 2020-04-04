@@ -129,7 +129,6 @@ class core():
             await asyncio.sleep(1)
             if len(self.connection_pool) < (pool_max_size / 2):
                 pool_max_size *= 2
-            print(pool_max_size)
 
     async def pool_health(self):
         while True:
