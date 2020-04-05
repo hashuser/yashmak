@@ -7,6 +7,7 @@ import os
 import sys
 import traceback
 import gzip
+import time
 
 class core():
     def __init__(self):
@@ -143,7 +144,12 @@ class core():
                     self.connection_pool.remove(x)
                     await self.clean_up(x[0], x[1])
             self.locked = False
-            await asyncio.sleep(5)
+            for x in range(10):
+                S = time.time()
+                await asyncio.sleep(0.5)
+                E = time.time()
+                if E - S > 1:
+                    break
 
     async def update_expection_list(self):
         while True:
