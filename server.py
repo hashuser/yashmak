@@ -103,8 +103,8 @@ class core():
         try:
             if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
                 raise Exception
-            if os.path.exists(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt'):
-                with open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.txt', 'rb') as file:
+            if os.path.exists(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json'):
+                with open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json', 'rb') as file:
                     content = file.read()
                 if compress:
                     content = gzip.compress(content, gzip._COMPRESS_LEVEL_FAST)
@@ -179,10 +179,9 @@ class core():
         return None
 
     def add_host(self, host, uuid):
-        if uuid in self.host_list:
-            self.host_list[uuid].add(host.replace(b'*',b''))
-        else:
-            self.host_list[uuid] = set(host.replace(b'*',b''))
+        if uuid not in self.host_list:
+            self.host_list[uuid] = set()
+        self.host_list[uuid].add(host.replace(b'*', b''))
 
     async def write_host(self):
         def encode(host):
@@ -192,7 +191,7 @@ class core():
         while True:
             for x in self.host_list:
                 if x != b'blacklist':
-                    with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'w') as file:
+                    with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'w') as file:
                         json.dump(list(map(encode, list(self.host_list[x]))), file)
             await asyncio.sleep(60)
 
@@ -256,8 +255,8 @@ class yashmak(core):
         self.exception_list_name = self.config['uuid']
         for x in self.exception_list_name:
             self.host_list[x] = set()
-            if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt'):
-                with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.txt', 'r') as file:
+            if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.json'):
+                with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'r') as file:
                     data = json.load(file)
                 data = list(map(self.encode, data))
                 for y in data:
