@@ -100,8 +100,8 @@ install_Yashmak(){
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
   apt-get install python3.8 -y
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
-  wget -O geoip.txt https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.txt
-  wget -O blacklist.txt https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.txt
+  wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
+  wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
 }
 
 main(){
