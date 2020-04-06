@@ -28,7 +28,7 @@ install_service(){
 
 create_shortcut(){
   echo "alias Yashmak_config='vim $(cd "$(dirname "$0")";pwd)/config.json'">>~/.bashrc
-  echo "alias Yashmak_blacklist='vim $(cd "$(dirname "$0")";pwd)/blacklist.txt'">>~/.bashrc
+  echo "alias Yashmak_blacklist='vim $(cd "$(dirname "$0")";pwd)/blacklist.json'">>~/.bashrc
   echo "alias Yashmak_uninstall='rm -r $(cd "$(dirname "$0")";pwd)'">>~/.bashrc
   reboot
 }
