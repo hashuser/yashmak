@@ -21,7 +21,6 @@ class core():
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024)
         self.context = self.get_context()
         self.connection_pool = []
-        self.locked = False
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.pool())
@@ -115,7 +114,7 @@ class core():
     async def pool(self):
         pool_max_size = 8
         while True:
-            while len(self.connection_pool) < pool_max_size and not self.locked:
+            while len(self.connection_pool) < pool_max_size:
                 try:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
@@ -133,23 +132,24 @@ class core():
 
     async def pool_health(self):
         while True:
-            self.locked = True
             for x in self.connection_pool:
-                try:
-                    x[1].write(int.to_bytes(0, 2, 'big', signed=True))
-                    await x[1].drain()
-                except Exception as e:
-                    traceback.clear_frames(e.__traceback__)
-                    e.__traceback__ = None
-                    self.connection_pool.remove(x)
-                    await self.clean_up(x[0], x[1])
-            self.locked = False
+                self.loop.create_task(self.check_health(x))
             for x in range(10):
                 S = time.time()
                 await asyncio.sleep(0.5)
                 E = time.time()
-                if E - S > 1:
+                if E - S > 1.5:
                     break
+
+    async def check_health(self, x):
+        try:
+            x[1].write(int.to_bytes(0, 2, 'big', signed=True))
+            await x[1].drain()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            self.connection_pool.remove(x)
+            await self.clean_up(x[0], x[1])
 
     async def update_expection_list(self):
         while True:
@@ -319,9 +319,13 @@ class yashmak(core):
             os.popen('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /d "127.0.0.1:'''+str(self.config['listen'])+'''" /f''')
             os.popen('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /d "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>" /f''')
         elif platform == 'darwin':
+            os.popen('''networksetup -setwebproxystate "Wi-Fi" on''')
+            os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" on''')
             os.popen('''networksetup -setwebproxy "Wi-Fi" 127.0.0.1 '''+str(self.config['listen']))
             os.popen('''networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 '''+str(self.config['listen']))
             os.popen('''networksetup -setproxybypassdomains "Wi-Fi" localhost 127.* 10.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 172.32.* 192.168.*''')
+            os.popen('''networksetup -setwebproxystate "Ethernet" on''')
+            os.popen('''networksetup -setsecurewebproxystate "Ethernet" on''')
             os.popen('''networksetup -setwebproxy "Ethernet" 127.0.0.1 '''+str(self.config['listen']))
             os.popen('''networksetup -setsecurewebproxy "Ethernet" 127.0.0.1 '''+str(self.config['listen']))
             os.popen('''networksetup -setproxybypassdomains "Ethernet" localhost 127.* 10.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 172.32.* 192.168.*''')
