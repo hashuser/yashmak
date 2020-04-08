@@ -113,6 +113,7 @@ class core():
 
     async def pool(self):
         pool_max_size = 8
+        self.unhealthy = 0
         while True:
             while len(self.connection_pool) < pool_max_size:
                 try:
@@ -126,8 +127,9 @@ class core():
                 except Exception as e:
                    traceback.clear_frames(e.__traceback__)
                    e.__traceback__ = None
+            self.unhealthy = 0
             await asyncio.sleep(1)
-            if len(self.connection_pool) < (pool_max_size / 2):
+            if len(self.connection_pool) + self.unhealthy < (pool_max_size / 2):
                 pool_max_size *= 2
 
     async def pool_health(self):
@@ -149,6 +151,7 @@ class core():
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
             self.connection_pool.remove(x)
+            self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
     async def update_expection_list(self):
