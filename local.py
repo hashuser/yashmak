@@ -339,7 +339,7 @@ class yashmak(core):
             data = list(map(self.encode,data))
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
-        for x in ['192.168.0.0/16','127.0.0.0/8','10.0.0.0/8']:
+        for x in ['192.168.0.0/16','172.16.0.0/12','10.0.0.0/8']:
             network = ipaddress.ip_network(x)
             self.local_ip_list.append([int(network[0]), int(network[-1])])
         self.local_ip_list.sort()
