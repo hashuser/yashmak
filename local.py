@@ -38,21 +38,32 @@ class core():
             data, host, port, request_type = await self.process(data, client_reader, client_writer)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
-            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer))
+            await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
+                                 self.switch(server_reader, client_writer, server_writer, False))
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
-    async def switch(self, reader, writer, other):
+    async def switch(self, reader, writer, other, up):
         try:
-            while True:
-                data = await reader.read(16384)
-                writer.write(data)
-                await writer.drain()
-                if data == b'':
-                    break
+            if not up:
+                while True:
+                    data = await reader.read(16384)
+                    writer.write(data)
+                    await writer.drain()
+                    if data == b'':
+                        break
+            else:
+                while True:
+                    data = await reader.read(16384)
+                    if data[:3] == b'GET' or data[:4] == b'POST':
+                        host, port = self.get_http_address(data, 1)
+                        data = self.get_response(data, host, port)
+                    writer.write(data)
+                    await writer.drain()
+                    if data == b'':
+                        break
             await self.clean_up(writer, other)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
@@ -198,11 +209,15 @@ class core():
 
     async def process(self, data, client_reader, client_writer):
         request_type = self.get_request_type(data)
-        host, port = await self.get_address(data, request_type, client_reader, client_writer)
-        if request_type == 0 or request_type == 3:
+        if request_type == 3:
+            host, port = await self.get_socks5_address(client_reader, client_writer)
+            data = None
+        elif request_type == 0:
+            host, port = self.get_http_address(data, request_type)
             data = None
         else:
-            data = self.get_response(data, request_type, host, port)
+            host, port = self.get_http_address(data, request_type)
+            data = self.get_response(data, host, port)
         return data, host, port, request_type
 
     def get_request_type(self, data):
@@ -216,45 +231,45 @@ class core():
             request_type = 3
         return request_type
 
-    async def get_address(self, data, request_type, client_reader, client_writer):
-        if request_type != 3:
-            position = data.find(b' ') + 1
-            sigment = data[position:data.find(b' ', position)]
-            if request_type:
-                position = sigment.find(b'//') + 2
-                sigment = sigment[position:sigment.find(b'/', position)]
-            position = sigment.rfind(b':')
-            if position > 0 and position > sigment.rfind(b']'):
-                host = sigment[:position]
-                port = sigment[position + 1:]
-            else:
-                host = sigment
-                port = b'80'
-            host = host.replace(b'[', b'', 1)
-            host = host.replace(b']', b'', 1)
+    def get_http_address(self, data, request_type):
+        position = data.find(b' ') + 1
+        sigment = data[position:data.find(b' ', position)]
+        if request_type:
+            position = sigment.find(b'//') + 2
+            sigment = sigment[position:sigment.find(b'/', position)]
+        position = sigment.rfind(b':')
+        if position > 0 and position > sigment.rfind(b']'):
+            host = sigment[:position]
+            port = sigment[position + 1:]
         else:
-            client_writer.write(b'\x05\x00')
-            await client_writer.drain()
-            data = await asyncio.wait_for(client_reader.read(65535),20)
-            if data[3] == 1:
-                host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
-                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
-            elif data[3] == 4:
-                host = socket.inet_ntop(socket.AF_INET6, data[4:20]).encode('utf-8')
-                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
-            elif data[3] == 3:
-                host = data[5:5 + data[4]]
-                port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
-            client_writer.write(b'\x05\x00\x00' + data[3:])
-            await client_writer.drain()
+            host = sigment
+            port = b'80'
+        host = host.replace(b'[', b'', 1)
+        host = host.replace(b']', b'', 1)
         return host, port
 
-    def get_response(self, data, request_type, host, port):
-        if request_type:
-            data = data.replace(b'http://', b'', 1)
-            data = data.replace(host, b'', 1)
-            data = data.replace(b':' + port, b'', 1)
-            data = data.replace(b'Proxy-', b'', 1)
+    async  def get_socks5_address(self, client_reader, client_writer):
+        client_writer.write(b'\x05\x00')
+        await client_writer.drain()
+        data = await asyncio.wait_for(client_reader.read(65535), 20)
+        if data[3] == 1:
+            host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
+            port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+        elif data[3] == 4:
+            host = socket.inet_ntop(socket.AF_INET6, data[4:20]).encode('utf-8')
+            port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+        elif data[3] == 3:
+            host = data[5:5 + data[4]]
+            port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
+        client_writer.write(b'\x05\x00\x00' + data[3:])
+        await client_writer.drain()
+        return host, port
+
+    def get_response(self, data, host, port):
+        data = data.replace(b'http://', b'', 1)
+        data = data.replace(host, b'', 1)
+        data = data.replace(b':' + port, b'', 1)
+        data = data.replace(b'Proxy-', b'', 1)
         return data
 
     def get_exception(self, host):
