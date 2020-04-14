@@ -5,6 +5,7 @@ import ssl
 import json
 import os
 import sys
+import ipaddress
 import traceback
 import gzip
 import time
@@ -248,7 +249,7 @@ class core():
         host = host.replace(b']', b'', 1)
         return host, port
 
-    async  def get_socks5_address(self, client_reader, client_writer):
+    async def get_socks5_address(self, client_reader, client_writer):
         client_writer.write(b'\x05\x00')
         await client_writer.drain()
         data = await asyncio.wait_for(client_reader.read(65535), 20)
@@ -282,6 +283,14 @@ class core():
                 break
             if host[sigment_length + 1:] in self.exception_list:
                 return True
+        if host[0] == 49:
+            try:
+                ip = int(ipaddress.ip_address(host.decode('utf-8')))
+                for x in self.local_ip_list:
+                    if x[0] <= ip and ip <= x[1]:
+                        return True
+            except Exception:
+                pass
         return False
 
     def get_context(self):
@@ -296,6 +305,7 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.exception_list = set()
+        self.local_ip_list = []
         self.load_config()
         self.set_proxy()
         self.load_exception_list()
@@ -329,6 +339,10 @@ class yashmak(core):
             data = list(map(self.encode,data))
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
+        for x in ['192.168.0.0/16','127.0.0.0/8','10.0.0.0/8']:
+            network = ipaddress.ip_network(x)
+            self.local_ip_list.append([int(network[0]), int(network[-1])])
+        self.local_ip_list.sort()
 
     def set_proxy(self):
         platform = sys.platform
