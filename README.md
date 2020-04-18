@@ -34,9 +34,9 @@ sudo systemctl restart Yashmak
   * 传统PAC需要浏览器支持，相同的Javascript在不同的浏览器中性能差距大，同时无法简单的做到全局分流。Yashmak项目对此做出改进，内置高性能智能分流器(单个请求**平均耗时0.01ms**)，所有经过Yashmak的流量都会被合理科学的进行分流。Yashmak客户端中的ChinaList包含所有已知A/AAAA记录为中国IP的Host，每次请求都会通过智能分流器筛选，如所请求的Host在本地的ChinaList中则会直连，反之则将请求转发到代理服务器，过程中不进行任何DNS解析，避免可能的DNS泄露发生。代理服务器将通过GEOIP筛选所有请求，如DNS解析得到的A/AAAA记录为中国IP则将请求的Host保存到文件中，并正常代理该请求。Yashmak客户端每60s会从代理服务器获取ChinaList更新，更新完成后立即生效。基于用户请求每个UUID会获得独一无二的ChinaList。
 ## HMAK协议
 HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
-|36字节|2字节(有符号,Big Endian)|X字节|1字节|Y字节|1字节|
-|:---:|:---:|:---:|:---:|:---:|:---:|
-|UUID|指令长度L|地址A|'\n'分隔标识|端口P|'\n'分隔标识|
+|36字节|2字节(有符号,Big Endian)|X字节|1字节|Y字节|1字节|1字节|1字节|
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+|UUID|指令长度L|地址A|'\n'分隔标识|端口P|'\n'分隔标识|类型T|'\n'分隔标识|
 
 其中:
 * UUID: 预共享的UUID用于认证请求合法性
@@ -46,6 +46,9 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
   * L=-1: ChinaList更新请求(不压缩)
   * L=-2: TCP_Ping请求
   * L=-3: ChinaList更新请求(Gzip压缩)
+* 类型:
+  * T = 0: 使用TCP转发
+  * T = 1: 使用UDP转发
 ## 致谢
 Yashmak项目依赖于以下第三方库
 * [jsbronder/asyncio-dgram](https://github.com/jsbronder/asyncio-dgram)
