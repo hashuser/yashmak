@@ -46,3 +46,6 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
   * L=-1: ChinaList更新请求(不压缩)
   * L=-2: TCP_Ping请求
   * L=-3: ChinaList更新请求(Gzip压缩)
+## 致谢
+Yashmak项目依赖于以下第三方库
+* [jsbronder/asyncio-dgram](https://github.com/jsbronder/asyncio-dgram)
