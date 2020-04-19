@@ -49,6 +49,9 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
 * 类型:
   * T = 0: 使用TCP转发
   * T = 1: 使用UDP转发
+## 注意事项
+* 请确保客户端与代理服务器间链路正常，平均丢包率≤10%，安装脚本默认开启BBRv1
+![image](https://raw.githubusercontent.com/hashuser/yashmak/master/recourse/2020-04-19%20132834.png)
 ## 致谢
 Yashmak项目依赖于以下第三方库
 * [jsbronder/asyncio-dgram](https://github.com/jsbronder/asyncio-dgram)
