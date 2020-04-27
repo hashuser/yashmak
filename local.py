@@ -36,7 +36,8 @@ class core():
             data = await asyncio.wait_for(client_reader.read(65535),20)
             if data == b'':
                 raise Exception
-            data, host, port, request_type = await self.process(data, client_reader, client_writer)
+            data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
+            await self.redirect(client_writer,host,URL)
             type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
@@ -59,7 +60,8 @@ class core():
                 while True:
                     data = await reader.read(16384)
                     if data[:3] == b'GET' or data[:4] == b'POST':
-                        host, port = self.get_http_address(data, 1)
+                        URL, host, port = self.get_http_address(data, 1)
+                        await self.redirect(writer, host, URL)
                         data = self.get_response(data, host, port)
                     writer.write(data)
                     await writer.drain()
@@ -70,6 +72,28 @@ class core():
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
             await self.clean_up(writer, other)
+
+    async def redirect(self, writer, host, URL):
+        try:
+            def HSTS(HSTS_list,host):
+                if host in HSTS_list:
+                    return True
+                sigment_length = len(host)
+                while True:
+                    sigment_length = host.rfind(b'.', 0, sigment_length) - 1
+                    if sigment_length <= -1:
+                        break
+                    if host[sigment_length + 1:] in HSTS_list:
+                        return True
+
+            if URL != None and HSTS(self.HSTS_list,host):
+                writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+                await writer.drain()
+                await self.clean_up(writer)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(writer)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         server_writer = None
@@ -213,13 +237,14 @@ class core():
         if request_type == 3:
             host, port = await self.get_socks5_address(client_reader, client_writer)
             data = None
+            URL = None
         elif request_type == 0:
-            host, port = self.get_http_address(data, request_type)
+            URL, host, port = self.get_http_address(data, request_type)
             data = None
         else:
-            host, port = self.get_http_address(data, request_type)
+            URL, host, port = self.get_http_address(data, request_type)
             data = self.get_response(data, host, port)
-        return data, host, port, request_type
+        return data, URL, host, port, request_type
 
     def get_request_type(self, data):
         if data[:7] == b'CONNECT':
@@ -236,6 +261,10 @@ class core():
         position = data.find(b' ') + 1
         sigment = data[position:data.find(b' ', position)]
         if request_type:
+            URL = sigment.replace(b'http', b'https', 1)
+        else:
+            URL = None
+        if request_type:
             position = sigment.find(b'//') + 2
             sigment = sigment[position:sigment.find(b'/', position)]
         position = sigment.rfind(b':')
@@ -247,7 +276,7 @@ class core():
             port = b'80'
         host = host.replace(b'[', b'', 1)
         host = host.replace(b']', b'', 1)
-        return host, port
+        return URL, host, port
 
     async def get_socks5_address(self, client_reader, client_writer):
         client_writer.write(b'\x05\x00')
@@ -270,6 +299,7 @@ class core():
         data = data.replace(b'http://', b'', 1)
         data = data.replace(host, b'', 1)
         data = data.replace(b':' + port, b'', 1)
+        data = data.replace(b'[]', b'', 1)
         data = data.replace(b'Proxy-', b'', 1)
         return data
 
@@ -289,8 +319,9 @@ class core():
                 for x in self.local_ip_list:
                     if x[0] <= ip and ip <= x[1]:
                         return True
-            except Exception:
-                pass
+            except Exception as e:
+                traceback.clear_frames(e.__traceback__)
+                e.__traceback__ = None
         return False
 
     def get_context(self):
@@ -305,6 +336,7 @@ class core():
 class yashmak(core):
     def __init__(self):
         self.exception_list = set()
+        self.HSTS_list = set()
         self.local_ip_list = []
         self.load_config()
         self.set_proxy()
@@ -323,11 +355,12 @@ class yashmak(core):
             self.config = json.loads(content)
             self.config[self.config['active']]['mode'] = self.config['mode']
             self.config[self.config['active']]['china_list'] = self.config_path + self.config['china_list']
+            self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'mode': '', 'active': '', 'china_list': '',
+            example = {'mode': '', 'active': '', 'china_list': '', 'HSTS_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
@@ -339,6 +372,12 @@ class yashmak(core):
             data = list(map(self.encode,data))
             for x in data:
                 self.exception_list.add(x.replace(b'*',b''))
+        if self.config['HSTS_list'] != '':
+            with open(self.config['HSTS_list'], 'r') as file:
+                data = json.load(file)
+            data = list(map(self.encode,data))
+            for x in data:
+                self.HSTS_list.add(x.replace(b'*',b''))
         for x in ['192.168.0.0/16','172.16.0.0/12','10.0.0.0/8']:
             network = ipaddress.ip_network(x)
             self.local_ip_list.append([int(network[0]), int(network[-1])])
