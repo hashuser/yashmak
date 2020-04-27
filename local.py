@@ -61,7 +61,6 @@ class core():
                     data = await reader.read(16384)
                     if data[:3] == b'GET' or data[:4] == b'POST':
                         URL, host, port = self.get_http_address(data, 1)
-                        await self.redirect(writer, host, URL)
                         data = self.get_response(data, host, port)
                     writer.write(data)
                     await writer.drain()
