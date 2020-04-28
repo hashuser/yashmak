@@ -46,9 +46,9 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
   * L=-1: ChinaList更新请求(不压缩)
   * L=-2: TCP_Ping请求
   * L=-3: ChinaList更新请求(Gzip压缩)
-* 类型:
-  * T = 0: 禁用连接复用
-  * T = 1: 启用连接复用
+* 连接复用:
+  * T = 0: 禁用
+  * T = 1: 启用
 ## 注意事项
 * 请确保客户端与代理服务器间链路正常，平均丢包率≤10%，安装脚本默认开启BBRv1
 ![image](https://raw.githubusercontent.com/hashuser/yashmak/master/recourse/2020-04-19%20132834.png)
