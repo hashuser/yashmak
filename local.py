@@ -26,7 +26,7 @@ class core():
         self.loop.create_task(server)
         self.loop.create_task(self.pool())
         self.loop.create_task(self.pool_health())
-        self.loop.create_task(self.update_expection_list())
+        self.loop.create_task(self.update_white_list())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -38,8 +38,7 @@ class core():
                 raise Exception
             data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
             await self.redirect(client_writer,host,URL)
-            type = self.config['mode'] == 'global' or (self.config['mode'] == 'auto' and not self.get_exception(host))
-            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,type)
+            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,self.get_type(host))
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
                                  self.switch(server_reader, client_writer, server_writer, False))
         except Exception as e:
@@ -189,7 +188,7 @@ class core():
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
-    async def update_expection_list(self):
+    async def update_white_list(self):
         while True:
             try:
                 server_writer = None
@@ -208,18 +207,18 @@ class core():
                     if data == b'' or data == b'\n':
                         break
                     customize += data
-                if os.path.exists(self.config['china_list']) and customize != b'':
-                    with open(self.config['china_list'], 'r') as file:
+                if os.path.exists(self.config['white_list']) and customize != b'':
+                    with open(self.config['white_list'], 'r') as file:
                         data = json.load(file)
                     customize = json.loads(gzip.decompress(customize))
                     data += customize
                     for x in list(map(self.encode, customize)):
-                        self.exception_list.add(x.replace(b'*', b''))
+                        self.white_list.add(x.replace(b'*', b''))
                     data = list(set(data))
-                    with open(self.config['china_list'], 'w') as file:
+                    with open(self.config['white_list'], 'w') as file:
                         json.dump(data, file)
                 elif customize != b'':
-                    with open(self.config['china_list'], 'wb') as file:
+                    with open(self.config['white_list'], 'wb') as file:
                         file.write(customize)
                 await self.clean_up(server_writer, file)
             except Exception as e:
@@ -244,6 +243,16 @@ class core():
             URL, host, port = self.get_http_address(data, request_type)
             data = self.get_response(data, host, port)
         return data, URL, host, port, request_type
+
+    def get_type(self, host):
+        if self.config['mode'] == 'global':
+            return True
+        elif self.config['mode'] == 'auto':
+            if self.in_it(host, self.black_list):
+                return True
+            elif not self.in_it(host, self.white_list):
+                return True
+        return False
 
     def get_request_type(self, data):
         if data[:7] == b'CONNECT':
@@ -302,15 +311,15 @@ class core():
         data = data.replace(b'Proxy-', b'', 1)
         return data
 
-    def get_exception(self, host):
-        if host in self.exception_list:
+    def in_it(self, host, var):
+        if host in var:
             return True
         sigment_length = len(host)
         while True:
             sigment_length = host.rfind(b'.', 0, sigment_length) - 1
             if sigment_length <= -1:
                 break
-            if host[sigment_length + 1:] in self.exception_list:
+            if host[sigment_length + 1:] in var:
                 return True
         if host[0] == 49:
             try:
@@ -334,7 +343,8 @@ class core():
 
 class yashmak(core):
     def __init__(self):
-        self.exception_list = set()
+        self.white_list = set()
+        self.black_list = set()
         self.HSTS_list = set()
         self.local_ip_list = []
         self.load_config()
@@ -353,30 +363,30 @@ class yashmak(core):
             content = self.translate(content)
             self.config = json.loads(content)
             self.config[self.config['active']]['mode'] = self.config['mode']
-            self.config[self.config['active']]['china_list'] = self.config_path + self.config['china_list']
+            self.config[self.config['active']]['white_list'] = self.config_path + self.config['white_list']
+            self.config[self.config['active']]['black_list'] = self.config_path + self.config['black_list']
             self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'mode': '', 'active': '', 'china_list': '', 'HSTS_list': '',
+            example = {'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
     def load_exception_list(self):
-        if self.config['china_list'] != '':
-            with open(self.config['china_list'], 'r') as file:
-                data = json.load(file)
-            data = list(map(self.encode,data))
-            for x in data:
-                self.exception_list.add(x.replace(b'*',b''))
-        if self.config['HSTS_list'] != '':
-            with open(self.config['HSTS_list'], 'r') as file:
-                data = json.load(file)
-            data = list(map(self.encode,data))
-            for x in data:
-                self.HSTS_list.add(x.replace(b'*',b''))
+        def load_list(location, var, func):
+            if location != '':
+                with open(location, 'r') as file:
+                    data = json.load(file)
+                data = list(map(func, data))
+                for x in data:
+                    var.add(x.replace(b'*', b''))
+
+        load_list(self.config['white_list'], self.white_list, self.encode)
+        load_list(self.config['black_list'], self.black_list, self.encode)
+        load_list(self.config['HSTS_list'], self.HSTS_list, self.encode)
         for x in ['192.168.0.0/16','172.16.0.0/12','10.0.0.0/8']:
             network = ipaddress.ip_network(x)
             self.local_ip_list.append([int(network[0]), int(network[-1])])
