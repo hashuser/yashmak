@@ -217,6 +217,7 @@ class core():
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['h2', 'http/1.1'])
         context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
 
