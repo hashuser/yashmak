@@ -334,7 +334,9 @@ class core():
 
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.set_ciphers("TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-SHA256:ECDHE-RSA-AES256-SHA384:AES128-GCM-SHA256:AES256-GCM-SHA384:AES128-SHA256:AES256-SHA256")
         context.verify_mode = ssl.CERT_REQUIRED
         context.check_hostname = True
         context.load_verify_locations(self.config_path + self.config['cert'])
