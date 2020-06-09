@@ -36,9 +36,11 @@ create_shortcut(){
   reboot
 }
 
-open_bbr(){
+system_configr(){
   echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
-  echo "net.ipv4.tcp_congestion_control=bbr" > /etc/sysctl.conf
+  echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_keepalive_time=600" >> /etc/sysctl.conf
+  echo "net.core.somaxconn=262114" >> /etc/sysctl.conf
   sysctl -p
 }
 
@@ -111,7 +113,7 @@ main(){
   install_Yashmak
   create_service
   install_service
-  open_bbr
+  system_config
   sign_cert
   automatic_reboot
   create_shortcut
