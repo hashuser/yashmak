@@ -91,7 +91,7 @@ sign_cert(){
 
 automatic_reboot(){
   apt-get install cron -y
-  echo "0 12 * * * root reboot" >> /etc/crontab
+  echo "0 16 * * * root reboot" >> /etc/crontab
   service cron restart
 }
 
