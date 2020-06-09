@@ -91,7 +91,8 @@ sign_cert(){
 
 automatic_reboot(){
   apt-get install cron -y
-  echo "0 16 * * * root reboot" >> /etc/crontab
+  echo "0 16 * * * root systemctl restart Yashmak" >> /etc/crontab
+  echo "0 16 * * 7 root reboot" >> /etc/crontab
   service cron restart
 }
 
