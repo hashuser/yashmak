@@ -7,6 +7,8 @@ import sys
 import ipaddress
 import traceback
 import gzip
+import random
+import time
 
 class core():
     def __init__(self):
@@ -18,10 +20,19 @@ class core():
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
+        self.init()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
         self.loop.run_forever()
+
+    def init(self):
+        s = socket.create_connection(('amazon.com', 443))
+        ss = ssl.wrap_socket(s, server_side=False)
+        ss.send(b'095fd1ca80a444b586d769cbf652478d')
+        utc = time.mktime(time.strptime(str(ss.read(65535).split(b'\r\n')[2][6:])[2:-1],'%a, %d %b %Y %H:%M:%S GMT'))
+        ss.close()
+        self.utc_difference = utc - time.time()
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -29,8 +40,7 @@ class core():
             tasks = None
             uuid = await asyncio.wait_for(client_reader.read(36),20)
             if uuid not in self.config['uuid']:
-                client_writer.write(b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand.<hr/>Powered by Tengine</body>\r\n</html>\r\n''')
-                await client_writer.drain()
+                await self.camouflage(client_reader,client_writer)
                 raise Exception
             data = 0
             while data == 0:
@@ -54,6 +64,13 @@ class core():
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
+
+    async def camouflage(self,reader,writer):
+        GMT = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.localtime(self.utc_difference + time.time())).encode('utf-8')
+        content = b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand. Sorry for the inconvenience.<br/>\r\nPlease report this message and include the following information to us.<br/>\r\nThank you very much!</p>\r\n<table>\r\n<tr>\r\n<td>URL:</td>\r\n<td>https://''' + self.config['domain'] + b'''</td>\r\n</tr>\r\n<tr>\r\n<td>Server:</td>\r\n<td>''' + self.config['servername'] + b'''</td>\r\n</tr>\r\n<tr>\r\n<td>Date:</td>\r\n<td>''' + time.strftime('%Y/%m/%d %H:%M:%S', time.localtime()).encode('utf-8') + b'''</td>\r\n</tr>\r\n</table>\r\n<hr/>Powered by Tengine<hr><center>tengine</center>\r\n</body>\r\n</html>\r\n'''
+        writer.write(b'''HTTP/1.1 400 Bad Request\r\nServer: Tengine\r\nDate: ''' + GMT + b'''\r\nContent-Type: text/html\r\nContent-Length: ''' + str(len(content)).encode('utf-8') + b'''\r\nConnection: close\r\n\r\n''' + content)
+        await writer.drain()
+        await asyncio.wait_for(reader.readexactly(random.randint(500,2000)),20)
 
     async def switch(self, reader, writer, other):
         try:
@@ -217,10 +234,9 @@ class core():
     def get_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
-        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.set_alpn_protocols(['http/1.1'])
         context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
-
 
 class yashmak(core):
     def __init__(self):
@@ -241,8 +257,10 @@ class yashmak(core):
             self.config = json.loads(content)
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['listen'] = int(self.config['listen'])
+            self.config['domain'] = self.config['domain'].encode('utf-8')
+            self.config['servername'] = self.config['servername'].encode('utf-8')
         else:
-            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
+            example = {'servername': '', 'domain': '', 'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
