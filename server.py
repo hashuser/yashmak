@@ -40,7 +40,11 @@ class core():
             tasks = None
             uuid = await asyncio.wait_for(client_reader.read(36),20)
             if uuid not in self.config['uuid']:
-                await self.camouflage(client_reader,client_writer)
+                for x in [b'0',b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9']:
+                    if x in uuid:
+                        await self.camouflage(client_reader,client_writer)
+                        raise Exception
+                await asyncio.sleep(60)
                 raise Exception
             data = 0
             while data == 0:
