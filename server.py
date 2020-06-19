@@ -7,7 +7,6 @@ import sys
 import ipaddress
 import traceback
 import gzip
-import random
 import time
 
 class core():
@@ -38,13 +37,9 @@ class core():
         try:
             server_writer = None
             tasks = None
-            uuid = await asyncio.wait_for(client_reader.read(36),20)
+            uuid = await asyncio.wait_for(client_reader.read(36),10)
             if uuid not in self.config['uuid']:
-                for x in [b'0',b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9']:
-                    if x in uuid:
-                        await self.camouflage(client_reader,client_writer)
-                        raise Exception
-                await asyncio.sleep(60)
+                await asyncio.wait_for(self.get_complete_header(uuid,client_reader,client_writer),30)
                 raise Exception
             data = 0
             while data == 0:
@@ -69,12 +64,82 @@ class core():
             e.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
-    async def camouflage(self,reader,writer):
-        GMT = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.localtime(self.utc_difference + time.time())).encode('utf-8')
-        content = b'''<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">\r\n<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body bgcolor="white">\r\n<h1>400 Bad Request</h1>\r\n<p>Your browser sent a request that this server could not understand. Sorry for the inconvenience.<br/>\r\nPlease report this message and include the following information to us.<br/>\r\nThank you very much!</p>\r\n<table>\r\n<tr>\r\n<td>URL:</td>\r\n<td>https://''' + self.config['domain'] + b'''</td>\r\n</tr>\r\n<tr>\r\n<td>Server:</td>\r\n<td>''' + self.config['servername'] + b'''</td>\r\n</tr>\r\n<tr>\r\n<td>Date:</td>\r\n<td>''' + time.strftime('%Y/%m/%d %H:%M:%S', time.localtime()).encode('utf-8') + b'''</td>\r\n</tr>\r\n</table>\r\n<hr/>Powered by Tengine<hr><center>tengine</center>\r\n</body>\r\n</html>\r\n'''
-        writer.write(b'''HTTP/1.1 400 Bad Request\r\nServer: Tengine\r\nDate: ''' + GMT + b'''\r\nContent-Type: text/html\r\nContent-Length: ''' + str(len(content)).encode('utf-8') + b'''\r\nConnection: close\r\n\r\n''' + content)
-        await writer.drain()
-        await asyncio.wait_for(reader.readexactly(random.randint(500,2000)),20)
+    def HTTP_header_decoder(self, header):
+        lower = [b'a',b'b',b'c',b'd',b'e',b'f',b'g',b'h',b'i',b'j',b'k',b'l',b'm',b'n',b'o',b'p',b'q',b'r',b's',b't',b'u',b'v',b'w',b'x',b'y',b'z']
+        number = [b'0',b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9']
+        punctuation = [b'!',b'@',b'#',b'$',b'%',b'^',b'&',b'*',b'(',b')',b'-',b'=',b'_',b'+',b'{',b'}',b'[',b']',b'|',b';',b':',b',',b'.',b'/',b'<',b'>',b'?',b"'",b'"',b'~',b'`']
+
+        def has_(value,map):
+            for x in map:
+                if x in value:
+                    return True
+
+        header = header.split(b'\r\n')
+        sigment = header[0].split(b' ')
+        if has_(sigment[0],lower) or has_(sigment[0],number) or has_(sigment[0],punctuation):
+            return 400
+        try:
+            if b'/' not in sigment[1]:
+                return 400
+        except Exception:
+            pass
+        try:
+            if sigment[2][0] == 72:
+                for x in sigment[2][:5]:
+                    if x not in [72,84,80,47]:
+                        return 400
+            elif header[1] == b'':
+                return 4042
+        except Exception:
+            pass
+        try:
+            temp = sigment[2].split(b'/')[1]
+            try:
+                temp = float(temp)
+                if temp < 1.0 or temp >= 2.0:
+                    return 505
+            except Exception:
+                return 505
+        except Exception:
+            pass
+        return 404
+
+    async def get_complete_header(self, header, reader, writer):
+        while True:
+            result = self.HTTP_header_decoder(header)
+            if b'\r\n\r\n' in header and result == 404:
+                await self.camouflage(writer, 404)
+                await asyncio.sleep(10)
+                break
+            elif result == 400:
+                await self.camouflage(writer, 400)
+                await asyncio.sleep(10)
+                break
+            elif result == 505:
+                await self.camouflage(writer, 505)
+                await asyncio.sleep(10)
+                break
+            elif result == 4042:
+                await self.camouflage(writer, 4042)
+                break
+            header += await reader.read(65535)
+
+    async def camouflage(self,writer,type=400):
+        try:
+            GMT = time.strftime('%a, %d %b %Y %H:%M:%S GMT', time.localtime(self.utc_difference + time.time())).encode('utf-8')
+            if type == 400:
+                writer.write(b'''HTTP/1.1 400 Bad Request\r\nServer: nginx\r\nDate: ''' + GMT + b'''\r\nContent-Type: text/html\r\nContent-Length: 150\r\nConnection: close\r\n\r\n<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
+            elif type == 404:
+                writer.write(b'''HTTP/1.1 404 Not Found\r\nServer: nginx\r\nDate: ''' + GMT + b'''\r\nContent-Type: text/html\r\nContent-Length: 146\r\nConnection: keep-alive\r\n\r\n<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
+            elif type == 505:
+                writer.write(b'''HTTP/1.1 505 HTTP Version Not Supported\r\nServer: nginx\r\nDate: ''' + GMT + b'''\r\nContent-Type: text/html\r\nContent-Length: 180\r\nConnection: close\r\n\r\n<html>\r\n<head><title>505 HTTP Version Not Supported</title></head>\r\n<body>\r\n<center><h1>505 HTTP Version Not Supported</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
+            elif type == 4042:
+                writer.write(b'''<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
+            await writer.drain()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(None, writer)
 
     async def switch(self, reader, writer, other):
         try:
@@ -261,10 +326,8 @@ class yashmak(core):
             self.config = json.loads(content)
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['listen'] = int(self.config['listen'])
-            self.config['domain'] = self.config['domain'].encode('utf-8')
-            self.config['servername'] = self.config['servername'].encode('utf-8')
         else:
-            example = {'servername': '', 'domain': '', 'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
+            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
