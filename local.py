@@ -9,6 +9,8 @@ import ipaddress
 import traceback
 import gzip
 import time
+import ctypes
+import winreg
 
 class core():
     def __init__(self):
@@ -373,6 +375,7 @@ class yashmak(core):
         else:
             example = {'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
+            os.makedirs(self.config_path)
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -396,9 +399,18 @@ class yashmak(core):
     def set_proxy(self):
         platform = sys.platform
         if platform == 'win32':
-            os.popen('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyEnable /t REG_DWORD /d 1 /f''')
-            os.popen('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyServer /d "127.0.0.1:'''+str(self.config['listen'])+'''" /f''')
-            os.popen('''reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" /v ProxyOverride /d "localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>" /f''')
+            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
+
+            def set_key(name, value):
+                _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
+                winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+
+            set_key('ProxyEnable', 1)
+            set_key('ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
+            set_key('ProxyServer', '127.0.0.1:'+str(self.config['listen']))
+            internet_set_option = ctypes.windll.wininet.InternetSetOptionW
+            internet_set_option(0, 37, 0, 0)
+            internet_set_option(0, 39, 0, 0)
         elif platform == 'darwin':
             os.popen('''networksetup -setwebproxystate "Wi-Fi" on''')
             os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" on''')
