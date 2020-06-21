@@ -42,12 +42,16 @@ system_config(){
   echo "net.ipv4.tcp_keepalive_time=600" >> /etc/sysctl.conf
   echo "net.core.somaxconn=262114" >> /etc/sysctl.conf
   sysctl -p
+  apt-get install resolvconf -y
+  echo "dns-nameservers 1.1.1.1" >> /etc/network/interfaces
+  /etc/init.d/networking restart
+  /etc/init.d/resolvconf restart
 }
 
 sign_cert(){
   uuid=$(cat /proc/sys/kernel/random/uuid)
   uuid=${uuid:0:7}
-  apt-get install openssl
+  apt-get install openssl -y
   mkdir -p ./demoCA/{private,newcerts,conf}
   mkdir -p ./server/{private,request,conf}
   touch ./demoCA/index.txt
