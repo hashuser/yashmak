@@ -7,7 +7,7 @@
 * 支持HTTP/Socks5代理协议
 * Host屏蔽/重定向
 
-### 安装
+### 安装(Ubuntu 20.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.sh | bash
 ``` 
@@ -52,6 +52,3 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
 ## 注意事项
 * 请确保客户端与代理服务器间链路正常，平均丢包率≤10%，安装脚本默认开启BBRv1
 ![image](https://raw.githubusercontent.com/hashuser/yashmak/master/recourse/2020-04-19%20132834.png)
-## 致谢
-Yashmak项目依赖于以下第三方库
-* [jsbronder/asyncio-dgram](https://github.com/jsbronder/asyncio-dgram)
