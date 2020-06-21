@@ -37,7 +37,7 @@ create_shortcut(){
 }
 
 system_config(){
-  echo "net.core.default_qdisc=fq" > /etc/sysctl.conf
+  echo "net.core.default_qdisc=cake" > /etc/sysctl.conf
   echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_keepalive_time=600" >> /etc/sysctl.conf
   echo "net.core.somaxconn=262114" >> /etc/sysctl.conf
