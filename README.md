@@ -7,7 +7,7 @@
 * 支持HTTP/Socks5代理协议
 * Host屏蔽/重定向
 
-### 安装(Ubuntu 20.04TLS+)
+### 安装(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.sh | bash
 ``` 
