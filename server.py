@@ -23,6 +23,7 @@ class core():
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
+        self.loop.create_task(self.write_log())
         self.loop.run_forever()
 
     def init(self):
@@ -32,6 +33,7 @@ class core():
         utc = time.mktime(time.strptime(str(ss.read(65535).split(b'\r\n')[2][6:])[2:-1],'%a, %d %b %Y %H:%M:%S GMT'))
         ss.close()
         self.utc_difference = utc - time.time()
+        self.start_time = time.localtime()
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -39,7 +41,8 @@ class core():
             tasks = None
             uuid = await asyncio.wait_for(client_reader.read(36),10)
             if uuid not in self.config['uuid']:
-                await asyncio.wait_for(self.get_complete_header(uuid,client_reader,client_writer),30)
+                header = await self.get_complete_header(uuid,client_reader,client_writer)
+                self.log.append(str((client_writer.get_extra_info("peername")[0], str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n','\n'))
                 raise Exception
             data = 0
             while data == 0:
@@ -106,23 +109,26 @@ class core():
 
     async def get_complete_header(self, header, reader, writer):
         while True:
-            result = self.HTTP_header_decoder(header)
-            if b'\r\n\r\n' in header and result == 404:
-                await self.camouflage(writer, 404)
-                await asyncio.sleep(10)
-                break
-            elif result == 400:
-                await self.camouflage(writer, 400)
-                await asyncio.sleep(10)
-                break
-            elif result == 505:
-                await self.camouflage(writer, 505)
-                await asyncio.sleep(10)
-                break
-            elif result == 4042:
-                await self.camouflage(writer, 4042)
-                break
-            header += await reader.read(65535)
+            try:
+                result = self.HTTP_header_decoder(header)
+                if b'\r\n\r\n' in header and result == 404:
+                    await self.camouflage(writer, 404)
+                    await asyncio.sleep(10)
+                    return header
+                elif result == 400:
+                    await self.camouflage(writer, 400)
+                    await asyncio.sleep(10)
+                    return header
+                elif result == 505:
+                    await self.camouflage(writer, 505)
+                    await asyncio.sleep(10)
+                    return header
+                elif result == 4042:
+                    await self.camouflage(writer, 4042)
+                    return header
+                header += await asyncio.wait_for(reader.read(65535), 30)
+            except Exception:
+                return header
 
     async def camouflage(self,writer,type=400):
         try:
@@ -267,18 +273,37 @@ class core():
     def add_host(self, host, uuid):
         if uuid not in self.host_list:
             self.host_list[uuid] = set()
-        self.host_list[uuid].add(host.replace(b'*', b''))
+        self.host_list[uuid].add(host)
 
     async def write_host(self):
-        def encode(host):
-            if host[0] == 46:
-                return '*' + host.decode('utf-8')
+        def decode(host):
             return host.decode('utf-8')
+
+        def encode(host):
+            return host.encode('utf-8')
+
         while True:
             for x in self.host_list:
-                if x != b'blacklist':
+                if x != b'blacklist' and len(self.host_list[x]) > 0:
+                    if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.json'):
+                        with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'r') as file:
+                            data = json.load(file)
+                            data = list(map(encode, data))
+                        for y in data:
+                            self.host_list[x].add(y)
                     with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'w') as file:
-                        json.dump(list(map(encode, list(self.host_list[x]))), file)
+                        json.dump(list(map(decode, list(self.host_list[x]))), file)
+                    self.host_list[x].clear()
+            await asyncio.sleep(60)
+
+    async def write_log(self):
+        if not os.path.exists(self.local_path + '/Logs/'):
+            os.makedirs(self.local_path + '/Logs/')
+        while True:
+            with open(self.local_path + '/Logs/' + time.strftime("%Y%m%d%H%M%S", self.start_time) + '.json', 'a+') as file:
+                for x in self.log:
+                    file.write(x+'\n\n')
+                self.log.clear()
             await asyncio.sleep(60)
 
     def conclude(self, data):
@@ -309,6 +334,7 @@ class core():
 
 class yashmak(core):
     def __init__(self):
+        self.log = []
         self.host_list = dict()
         self.geoip_list = []
         self.load_config()
@@ -339,14 +365,10 @@ class yashmak(core):
             self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
         self.exception_list_name = self.config['uuid']
+        if not os.path.exists(self.local_path + '/Cache/'):
+            os.makedirs(self.local_path + '/Cache/')
         for x in self.exception_list_name:
             self.host_list[x] = set()
-            if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.json'):
-                with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'r') as file:
-                    data = json.load(file)
-                data = list(map(self.encode, data))
-                for y in data:
-                    self.host_list[x].add(y.replace(b'*', b''))
         with open(self.config['blacklist'], 'r') as file:
             data = json.load(file)
         for key in list(data):
