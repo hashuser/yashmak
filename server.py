@@ -13,10 +13,10 @@ class core():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
                                             dualstack_ipv6=True)
         else:
-            listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
         self.init()
@@ -41,8 +41,9 @@ class core():
             tasks = None
             uuid = await asyncio.wait_for(client_reader.read(36),10)
             if uuid not in self.config['uuid']:
+                peer = client_writer.get_extra_info("peername")[0]
                 header = await self.get_complete_header(uuid,client_reader,client_writer)
-                self.log.append(str((client_writer.get_extra_info("peername")[0], str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n','\n'))
+                self.log.append(str((peer, str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n', '\n'))
                 raise Exception
             data = 0
             while data == 0:
@@ -351,9 +352,9 @@ class yashmak(core):
             content = self.translate(content)
             self.config = json.loads(content)
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
-            self.config['listen'] = int(self.config['listen'])
+            self.config['port'] = int(self.config['port'])
         else:
-            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'listen': ''}
+            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
