@@ -17,6 +17,7 @@ acme(){
 
 main(){
   acme
+  reboot
 }
 
 main
