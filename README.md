@@ -3,6 +3,7 @@
 * 基于asyncio框架, 支持海量并发
 * TCP预连接池，显著降低延迟（0-RTT）
 * 无DNS泄漏
+* 非阻塞异步DNS查询
 * 自动签发TLS自签证书
 * 支持HTTP/Socks5代理协议
 * Host屏蔽/重定向
