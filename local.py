@@ -296,6 +296,8 @@ class yashmak_core():
         else:
             URL = None
         position = data.find(b'Host: ') + 6
+        if position <= 5:
+            return None, None, None
         sigment = data[position:data.find(b'\r\n', position)]
         if b':' in sigment:
             port = sigment[sigment.rfind(b':') + 1:]
