@@ -1,4 +1,5 @@
-#!/usr/bin/env python3.8
+from PyQt5 import QtWidgets, QtGui, QtCore
+from dns import message, rdatatype
 import asyncio
 import socket
 import ssl
@@ -9,27 +10,34 @@ import ipaddress
 import traceback
 import gzip
 import time
+import multiprocessing
 import ctypes
 import winreg
 
-class core():
+class yashmak_core():
     def __init__(self):
-        self.loop = asyncio.get_event_loop()
-        if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
-                                            dualstack_ipv6=True)
-        else:
-            listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024)
-        self.context = self.get_context()
-        self.connection_pool = []
-        self.loop.set_exception_handler(self.exception_handler)
-        self.loop.create_task(server)
-        self.loop.create_task(self.pool())
-        self.loop.create_task(self.pool_health())
-        self.loop.create_task(self.update_white_list())
-        self.loop.run_forever()
+        try:
+            self.loop = asyncio.get_event_loop()
+            if socket.has_dualstack_ipv6():
+                listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
+                                                dualstack_ipv6=True)
+            else:
+                listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
+                                                dualstack_ipv6=False)
+            server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+            self.context = self.get_context()
+            self.connection_pool = []
+            self.dns_pool = dict()
+            self.dns_ttl = dict()
+            self.loop.set_exception_handler(self.exception_handler)
+            self.loop.create_task(server)
+            self.loop.create_task(self.pool())
+            self.loop.create_task(self.pool_health())
+            self.loop.create_task(self.update_white_list())
+            self.loop.run_forever()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -43,9 +51,9 @@ class core():
             server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,self.get_type(host))
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
                                  self.switch(server_reader, client_writer, server_writer, False))
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
     async def switch(self, reader, writer, other, up):
@@ -59,18 +67,18 @@ class core():
                         break
             else:
                 while True:
-                    data = await reader.read(16384)
+                    data = await reader.read(65536)
                     if data[:3] == b'GET' or data[:4] == b'POST':
-                        URL, host, port = self.get_http_address(data, 1)
+                        URL, host, port = self.get_http_address_new(data, 1)
                         data = self.get_response(data, host, port)
                     writer.write(data)
                     await writer.drain()
                     if data == b'':
                         break
             await self.clean_up(writer, other)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer, other)
 
     async def redirect(self, writer, host, URL):
@@ -90,16 +98,18 @@ class core():
                 writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
                 await writer.drain()
                 await self.clean_up(writer)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer)
 
     async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
         server_writer = None
         try:
-            if type:
-                if self.connection_pool == []:
+            if not type:
+                address = await self.resolve('A',host)
+            if type or not self.is_china_ip(address):
+                if len(self.connection_pool) == 0:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
                                                                                  ssl=self.context,
@@ -112,15 +122,17 @@ class core():
                 await server_writer.drain()
                 server_writer.write(host + b'\n' + port + b'\n')
                 await server_writer.drain()
-            else:
-                address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
-                if address[0] != '127.0.0.1':
-                    server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
-                else:
-                    if not request_type:
-                        client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
-                        await client_writer.drain()
-                    raise Exception
+            elif address != '127.0.0.1':
+                try:
+                    server_reader, server_writer = await asyncio.open_connection(host=address, port=port)
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+                    server_reader, server_writer = await asyncio.open_connection(host=address.replace(b'::ffff:', b''),port=port)
+            elif not request_type:
+                client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
+                await client_writer.drain()
+                raise Exception
             if not request_type:
                 client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
                 await client_writer.drain()
@@ -128,27 +140,27 @@ class core():
                 server_writer.write(data)
                 await server_writer.drain()
             return server_reader, server_writer
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
     async def clean_up(self, writer1=None, writer2=None):
         try:
             writer1.close()
             await writer1.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             writer2.close()
             await writer2.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     async def pool(self):
-        pool_max_size = 8
+        pool_max_size = 16
         self.unhealthy = 0
         while True:
             while len(self.connection_pool) < pool_max_size:
@@ -160,13 +172,13 @@ class core():
                     server_writer.write(self.config['uuid'])
                     await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
-                except Exception as e:
-                   traceback.clear_frames(e.__traceback__)
-                   e.__traceback__ = None
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
             self.unhealthy = 0
             await asyncio.sleep(1)
-            if len(self.connection_pool) + self.unhealthy < (pool_max_size / 2):
-                pool_max_size *= 2
+            if len(self.connection_pool) + self.unhealthy < (pool_max_size / 5):
+                pool_max_size = round(pool_max_size * 2)
 
     async def pool_health(self):
         while True:
@@ -183,9 +195,9 @@ class core():
         try:
             x[1].write(int.to_bytes(0, 2, 'big', signed=True))
             await x[1].drain()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             self.connection_pool.remove(x)
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
@@ -223,9 +235,9 @@ class core():
                     with open(self.config['white_list'], 'wb') as file:
                         file.write(customize)
                 await self.clean_up(server_writer, file)
-            except Exception as e:
-                traceback.clear_frames(e.__traceback__)
-                e.__traceback__ = None
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
                 await self.clean_up(server_writer, file)
             await asyncio.sleep(60)
 
@@ -239,10 +251,14 @@ class core():
             data = None
             URL = None
         elif request_type == 0:
-            URL, host, port = self.get_http_address(data, request_type)
+            URL, host, port = self.get_http_address_new(data, request_type)
+            if host == None or port == None:
+                URL, host, port = self.get_http_address_old(data, request_type)
             data = None
         else:
-            URL, host, port = self.get_http_address(data, request_type)
+            URL, host, port = self.get_http_address_new(data, request_type)
+            if host == None or port == None:
+                URL, host, port = self.get_http_address_old(data, request_type)
             data = self.get_response(data, host, port)
         return data, URL, host, port, request_type
 
@@ -250,9 +266,12 @@ class core():
         if self.config['mode'] == 'global':
             return True
         elif self.config['mode'] == 'auto':
-            if self.in_it(host, self.black_list):
+            ip = self.is_ip(host)
+            if not ip and self.in_it(host, self.black_list):
                 return True
-            elif not self.in_it(host, self.white_list):
+            elif not ip and not self.in_it(host, self.white_list):
+                return True
+            elif ip and not self.is_china_ip(host):
                 return True
         return False
 
@@ -267,7 +286,31 @@ class core():
             request_type = 3
         return request_type
 
-    def get_http_address(self, data, request_type):
+    def get_http_address_new(self, data, request_type):
+        host = None
+        port = None
+        position = data.find(b' ') + 1
+        sigment = data[position:data.find(b' ', position)]
+        if request_type:
+            URL = sigment.replace(b'http', b'https', 1)
+        else:
+            URL = None
+        position = data.find(b'Host: ') + 6
+        sigment = data[position:data.find(b'\r\n', position)]
+        if b':' in sigment:
+            port = sigment[sigment.rfind(b':') + 1:]
+            host = sigment[:sigment.rfind(b':')]
+        elif request_type == 0:
+            host = sigment
+            port = b'443'
+        else:
+            host = sigment
+            port = b'80'
+        return URL, host, port
+
+    def get_http_address_old(self, data, request_type):
+        host = None
+        port = None
         position = data.find(b' ') + 1
         sigment = data[position:data.find(b' ', position)]
         if request_type:
@@ -307,9 +350,7 @@ class core():
 
     def get_response(self, data, host, port):
         data = data.replace(b'http://', b'', 1)
-        data = data.replace(host, b'', 1)
-        data = data.replace(b':' + port, b'', 1)
-        data = data.replace(b'[]', b'', 1)
+        data = data[:data.find(b' ')+1]+data[data.find(b'/'):]
         data = data.replace(b'Proxy-', b'', 1)
         return data
 
@@ -323,15 +364,30 @@ class core():
                 break
             if host[sigment_length + 1:] in var:
                 return True
-        if host[0] == 49:
-            try:
-                ip = int(ipaddress.ip_address(host.decode('utf-8')))
-                for x in self.local_ip_list:
-                    if x[0] <= ip and ip <= x[1]:
-                        return True
-            except Exception as e:
-                traceback.clear_frames(e.__traceback__)
-                e.__traceback__ = None
+        return False
+
+    def is_ip(self, host):
+        try:
+            if b':' in host or int(host[host.rfind(b'.') + 1:]):
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
+    def is_china_ip(self, ip):
+        ip = ip.replace(b'::ffff:',b'',1)
+        ip = int(ipaddress.ip_address(ip.decode('utf-8')))
+        left = 0
+        right = len(self.geoip_list) - 1
+        while left <= right:
+            mid = left + (right - left) // 2
+            if self.geoip_list[mid][0] <= ip and ip <= self.geoip_list[mid][1]:
+                return True
+            elif self.geoip_list[mid][1] < ip:
+                left = mid + 1
+            elif self.geoip_list[mid][0] > ip:
+                right = mid - 1
         return False
 
     def get_context(self):
@@ -343,20 +399,67 @@ class core():
         context.load_verify_locations(self.config_path + self.config['cert'])
         return context
 
+    async def resolve(self,q_type,host):
+        if self.is_ip(host):
+            return host
+        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+            return self.dns_pool[host]
+        else:
+            return await self.query(host, q_type)
+        await self.clean_up(client_writer, None)
 
-class yashmak(core):
+    async def query(self,host,q_type):
+        try:
+            dic = {'A': rdatatype.A, 'AAAA': rdatatype.AAAA, 'CNAME': rdatatype.CNAME}
+            query = message.make_query(host.decode('utf-8'), dic[q_type])
+            query = query.to_wire()
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, ('114.114.114.114', 53))
+            await self.loop.sock_sendall(s, query)
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
+            await self.clean_up(s, None)
+            result = message.from_wire(result)
+            result = self.decode(str(result), q_type)
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
+            return result
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(s, None)
+
+    def decode(self,result,type):
+        result = result.split('\n')[6:]
+        type = ' ' + type.upper() + ' '
+        for x in result:
+            if type in x:
+                return x.split(' ')[-1].encode('utf-8')
+
+    async def clear_cache(self):
+        while True:
+            for x in list(self.dns_pool.keys()):
+                if (time.time() - self.dns_ttl[x]) > 600:
+                    del self.dns_pool[x]
+                    del self.dns_ttl[x]
+            for x in range(600):
+                S = time.time()
+                await asyncio.sleep(0.5)
+                E = time.time()
+                if E - S > 1.5:
+                    break
+
+
+class yashmak(yashmak_core):
     def __init__(self):
         self.white_list = set()
         self.black_list = set()
         self.HSTS_list = set()
-        self.local_ip_list = []
+        self.geoip_list = []
         self.load_config()
         self.set_proxy()
         self.load_exception_list()
         self.write_pid()
-
-    def serve_forever(self):
-        core.__init__(self)
+        yashmak_core.__init__(self)
 
     def load_config(self):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
@@ -365,17 +468,18 @@ class yashmak(core):
                 content = file.read()
             content = self.translate(content)
             self.config = json.loads(content)
+            self.config[self.config['active']]['startup'] = self.config['startup']
             self.config[self.config['active']]['mode'] = self.config['mode']
             self.config[self.config['active']]['white_list'] = self.config_path + self.config['white_list']
             self.config[self.config['active']]['black_list'] = self.config_path + self.config['black_list']
             self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
+            self.config[self.config['active']]['geoip_list'] = self.config_path + self.config['geoip_list']
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '',
+            example = {'startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
-            os.makedirs(self.config_path)
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -391,10 +495,12 @@ class yashmak(core):
         load_list(self.config['white_list'], self.white_list, self.encode)
         load_list(self.config['black_list'], self.black_list, self.encode)
         load_list(self.config['HSTS_list'], self.HSTS_list, self.encode)
-        for x in ['192.168.0.0/16','172.16.0.0/12','10.0.0.0/8']:
+        with open(self.config['geoip_list'], 'r') as file:
+            data = json.load(file)
+        for x in data:
             network = ipaddress.ip_network(x)
-            self.local_ip_list.append([int(network[0]), int(network[-1])])
-        self.local_ip_list.sort()
+            self.geoip_list.append([int(network[0]),int(network[-1])])
+        self.geoip_list.sort()
 
     def set_proxy(self):
         platform = sys.platform
@@ -402,8 +508,15 @@ class yashmak(core):
             INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
 
             def set_key(name, value):
-                _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
-                winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+                try:
+                    _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
+                    winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+                except Exception:
+                    if type(value) == type("a"):
+                        reg_type = 1
+                    elif type(value) == type(1):
+                        reg_type = 4
+                    winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
 
             set_key('ProxyEnable', 1)
             set_key('ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
@@ -433,6 +546,297 @@ class yashmak(core):
     def encode(self, data):
         return data.encode('utf-8')
 
+def exit():
+    platform = sys.platform
+    if platform == 'win32':
+        os.popen("CheckNetIsolation.exe loopbackexempt -c")
+        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
+
+        def set_key(name, value):
+            _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
+            winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+
+        set_key('ProxyEnable', 0)
+        internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
+        internet_set_option(0, 37, 0, 0)
+        internet_set_option(0, 39, 0, 0)
+    elif platform == 'darwin':
+        os.popen('''networksetup -setwebproxystate "Wi-Fi" off''')
+        os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" off''')
+        os.popen('''networksetup -setwebproxystate "Ethernet" off''')
+        os.popen('''networksetup -setsecurewebproxystate "Ethernet" off''')
+    kill()
+
+def enable_loopback_UWPs():
+    os.popen("CheckNetIsolation.exe loopbackexempt -c")
+    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings',0, winreg.KEY_ALL_ACCESS)
+    for x in range(winreg.QueryInfoKey(INTERNET_SETTINGS)[0]):
+        try:
+            os.popen("CheckNetIsolation.exe loopbackexempt -a -p=" + winreg.EnumKey(INTERNET_SETTINGS, x))
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+def is_light_Theme():
+    os.popen("CheckNetIsolation.exe loopbackexempt -c")
+    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize',0, winreg.KEY_ALL_ACCESS)
+    value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'SystemUsesLightTheme')
+    return value
+
+def detect_language():
+    os.popen("CheckNetIsolation.exe loopbackexempt -c")
+    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Control Panel\International\User Profile',0, winreg.KEY_ALL_ACCESS)
+    value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'Languages')
+    return value
+
+def kill():
+    global process1
+    try:
+        process1.kill()
+    except Exception as error:
+        traceback.clear_frames(error.__traceback__)
+        error.__traceback__ = None
+
+def run():
+    global process1
+    process1 = multiprocessing.Process(target=yashmak)
+    process1.daemon = True
+    process1.start()
+    time.sleep(1)
+    if not process1.is_alive():
+        raise Exception
+
+def edit_config(key,value):
+    path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+    if os.path.exists(path):
+        with open(path, 'r') as file:
+            content = file.read()
+        content = translate(content)
+        config = json.loads(content)
+    config[key] = value
+    with open(path, 'w') as file:
+        json.dump(config, file, indent=4)
+
+def translate(content):
+    return content.replace('\\', '/')
+
+def react(message):
+    global language
+    if message == 'Auto':
+        kill()
+        edit_config('mode','auto')
+        run()
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已设置为自动模式', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Has set to Auto Mode', msecs=1000)
+        a.setIconVisibleInMenu(True)
+        b.setIconVisibleInMenu(False)
+        c.setIconVisibleInMenu(False)
+    elif message == 'Global':
+        kill()
+        edit_config('mode','global')
+        run()
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已设置为全局模式', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Has set to Global Mode', msecs=1000)
+        a.setIconVisibleInMenu(False)
+        b.setIconVisibleInMenu(True)
+        c.setIconVisibleInMenu(False)
+    elif message == 'Direct':
+        exit()
+        edit_config('mode','direct')
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已设置为直连模式', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Has set to Direct Mode', msecs=1000)
+        a.setIconVisibleInMenu(False)
+        b.setIconVisibleInMenu(False)
+        c.setIconVisibleInMenu(True)
+    elif message == 'Close':
+        exit()
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已退出并断开连接', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Exited and disconnected', msecs=1000)
+        tp.hide()
+        w.hide()
+        time.sleep(1)
+        w.close()
+    elif message == 'AutoStartup':
+        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                content = file.read()
+            content = translate(content)
+            config = json.loads(content)
+        if config['startup'].lower() == 'auto':
+            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Recover.exe"
+            location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
+            try:
+                os.remove(location)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            make_link(location, target)
+            edit_config('startup','manual')
+            actions[3].setIcon(QtGui.QIcon('hook.svg'))
+            if language == 'zh-Hans-CN':
+                tp.showMessage('Yashmak', '已取消开机自启', msecs=1000)
+            else:
+                tp.showMessage('Yashmak', 'Auto startup has been disabled', msecs=1000)
+        else:
+            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Yashmak.exe"
+            location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
+            try:
+                os.remove(location)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            make_link(location, target)
+            edit_config('startup','auto')
+            actions[3].setIcon(QtGui.QIcon('correct.svg'))
+            if language == 'zh-Hans-CN':
+                tp.showMessage('Yashmak', '已设置开机自启', msecs=1000)
+            else:
+                tp.showMessage('Yashmak', 'Auto startup has been enabled', msecs=1000)
+    elif message == 'AllowUWP':
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已允许UWP应用连接代理', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'UWP apps have been allowed to connect to the proxy', msecs=1000)
+    tpmen.clear()
+    tpmen.addAction(a)
+    tpmen.addAction(b)
+    tpmen.addAction(c)
+    tpmen.addSeparator()
+    tpmen.addAction(d)
+    tpmen.addAction(e)
+    tpmen.addAction(f)
+    tp.setContextMenu(tpmen)
+
+
+def init():
+    a = actions[0]
+    b = actions[1]
+    c = actions[2]
+    d = actions[3]
+    e = actions[4]
+    f = actions[5]
+    path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+    if os.path.exists(path):
+        with open(path, 'r') as file:
+            content = file.read()
+        content = translate(content)
+        config = json.loads(content)
+    if config['mode'].lower() == 'auto':
+        a.setIconVisibleInMenu(True)
+        b.setIconVisibleInMenu(False)
+        c.setIconVisibleInMenu(False)
+    elif config['mode'].lower() == 'global':
+        a.setIconVisibleInMenu(False)
+        b.setIconVisibleInMenu(True)
+        c.setIconVisibleInMenu(False)
+    elif config['mode'].lower() == 'direct':
+        a.setIconVisibleInMenu(False)
+        b.setIconVisibleInMenu(False)
+        c.setIconVisibleInMenu(True)
+    if config['startup'].lower() == 'auto':
+        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Yashmak.exe"
+        d.setIcon(QtGui.QIcon('correct.svg'))
+    elif config['startup'].lower() == 'manual':
+        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Recover.exe"
+        d.setIcon(QtGui.QIcon('hook.svg'))
+    location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
+    try:
+        os.remove(location)
+    except Exception as error:
+        traceback.clear_frames(error.__traceback__)
+        error.__traceback__ = None
+    make_link(location, target)
+    e.setIcon(QtGui.QIcon('hook.svg'))
+    return a, b, c, d, e, f
+
+def make_link(location,target):
+    shortcut = '''"''' + os.path.abspath(os.path.dirname(sys.argv[0]))+'/Shortcut.exe" /f:'
+    working_dir = '''/w:"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '''"'''
+    os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
+
 if __name__ == '__main__':
-    server = yashmak()
-    server.serve_forever()
+    try:
+        if ctypes.windll.shell32.IsUserAnAdmin():
+            enable_loopback_UWPs()
+            sys.exit(0)
+        process1 = 0
+        process2 = 0
+        UWP = False
+        language = detect_language()[0]
+        app = QtWidgets.QApplication(sys.argv)
+        app.setStyle('windowsvista')
+        if language == 'zh-Hans-CN':
+            actions = [
+                QtWidgets.QAction(' 自动模式 ', triggered=lambda: react('Auto'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' 全局模式 ', triggered=lambda: react('Global'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' 直连模式 ', triggered=lambda: react('Direct'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' 开机自启 ', triggered=lambda: react('AutoStartup')),
+                QtWidgets.QAction(' 允许UWP ', triggered=lambda: react('AllowUWP')),
+                QtWidgets.QAction(' 退出 ', triggered=lambda: react('Close'))]
+        else:
+            actions = [
+                QtWidgets.QAction(' Auto Mode', triggered=lambda: react('Auto'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' Global Mode', triggered=lambda: react('Global'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' Direct Mode', triggered=lambda: react('Direct'), icon=QtGui.QIcon('correct.svg')),
+                QtWidgets.QAction(' Auto Startup', triggered=lambda: react('AutoStartup')),
+                QtWidgets.QAction(' Allow UWP', triggered=lambda: react('AllowUWP')),
+                QtWidgets.QAction(' Exit', triggered=lambda: react('Close'))]
+        w = QtWidgets.QWidget()
+        tp = QtWidgets.QSystemTrayIcon(w)
+        if is_light_Theme():
+            tp.setIcon(QtGui.QIcon('light_mode_icon.svg'))
+        else:
+            tp.setIcon(QtGui.QIcon('dark_mode_icon.svg'))
+        tpmen = QtWidgets.QMenu()
+        if language == 'zh-Hans-CN':
+            tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
+                                   QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
+                                   QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
+        else:
+            tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
+                                   QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
+                                   QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
+        tpmen.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+        tpmen.setWindowFlag(QtCore.Qt.FramelessWindowHint)
+        tpmen.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint)
+        tp.show()
+        a, b, c, d, e, f = init()
+        tpmen.addAction(a)
+        tpmen.addAction(b)
+        tpmen.addAction(c)
+        tpmen.addSeparator()
+        tpmen.addAction(d)
+        tpmen.addAction(e)
+        tpmen.addAction(f)
+        tp.setContextMenu(tpmen)
+        run()
+    except Exception:
+        exit()
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '启动失败', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Failed to launch', msecs=1000)
+        tp.hide()
+        w.deleteLater()
+        w.close()
+        raise Exception
+    else:
+        if language == 'zh-Hans-CN':
+            tp.showMessage('Yashmak', '已启动并成功连接', msecs=1000)
+        else:
+            tp.showMessage('Yashmak', 'Launched and successfully connected', msecs=1000)
+        app.exec()
+        tp.deleteLater()
+        sys.exit()
