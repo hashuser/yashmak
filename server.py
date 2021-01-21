@@ -1,4 +1,6 @@
 import asyncio
+import multiprocessing
+from dns import message, rdatatype
 import socket
 import ssl
 import json
@@ -9,7 +11,7 @@ import traceback
 import gzip
 import time
 
-class core():
+class yashmak_core():
     def __init__(self):
         self.loop = asyncio.get_event_loop()
         if socket.has_dualstack_ipv6():
@@ -18,8 +20,10 @@ class core():
         else:
             listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
                                             dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=1024,ssl=self.get_context())
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_context())
         self.init()
+        self.dns_pool = dict()
+        self.dns_ttl = dict()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
@@ -46,15 +50,17 @@ class core():
                 self.log.append(str((peer, str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n', '\n'))
                 raise Exception
             data = 0
-            while data == 0:
-                data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),20)), 'big',signed=True)
-                if data > 0:
+            while True:
+                data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),40)), 'big',signed=True)
+                if data == 0:
+                    continue
+                elif data > 0:
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     await self.redirect(client_writer, host, uuid)
-                    address = (await self.loop.getaddrinfo(host=host, port=port, family=0, type=socket.SOCK_STREAM))[0][4]
-                    self.is_china_ip(address[0], host, uuid)
-                    server_reader, server_writer = await asyncio.open_connection(host=address[0], port=address[1])
+                    address = await self.resolve('A',host)
+                    self.is_china_ip(address, host, uuid)
+                    server_reader, server_writer = await asyncio.open_connection(host=address, port=port)
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
@@ -151,7 +157,7 @@ class core():
     async def switch(self, reader, writer, other):
         try:
             while True:
-                data = await reader.read(16384)
+                data = await reader.read(32768)
                 writer.write(data)
                 await writer.drain()
                 if data == b'':
@@ -240,10 +246,22 @@ class core():
         port = data[position:data.find(b'\n', position)]
         return host, port
 
+    def is_ip(self,host):
+        try:
+            if b':' in host or int(host[host.rfind(b'.') + 1:]):
+                return True
+        except ValueError as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        return False
+
     def is_china_ip(self, ip, host, uuid):
+        if self.is_ip(host):
+            return False
         for x in [b'google',b'youtube',b'wikipedia',b'twitter']:
             if x in host:
                 return False
+        ip = ip.decode('utf-8')
         ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
         left = 0
@@ -333,16 +351,63 @@ class core():
         context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
 
-class yashmak(core):
+    async def resolve(self,q_type,host):
+        if self.is_ip(host):
+            return host
+        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+            return self.dns_pool[host]
+        else:
+            return await self.query(host, q_type)
+        await self.clean_up(client_writer, None)
+
+    async def query(self,host,q_type):
+        try:
+            dic = {'A': rdatatype.A, 'AAAA': rdatatype.AAAA, 'CNAME': rdatatype.CNAME}
+            query = message.make_query(host.decode('utf-8'), dic[q_type])
+            query = query.to_wire()
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, ('8.8.8.8', 53))
+            await self.loop.sock_sendall(s, query)
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
+            await self.clean_up(s, None)
+            result = message.from_wire(result)
+            result = self.decode(str(result), q_type)
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
+            return result
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(s, None)
+
+    def decode(self,result,type):
+        result = result.split('\n')[6:]
+        type = ' ' + type.upper() + ' '
+        for x in result:
+            if type in x:
+                return x.split(' ')[-1].encode('utf-8')
+
+    async def clear_cache(self):
+        while True:
+            for x in list(self.dns_pool.keys()):
+                if (time.time() - self.dns_ttl[x]) > 600:
+                    del self.dns_pool[x]
+                    del self.dns_ttl[x]
+            for x in range(600):
+                S = time.time()
+                await asyncio.sleep(0.5)
+                E = time.time()
+                if E - S > 1.5:
+                    break
+
+class yashmak(yashmak_core):
     def __init__(self):
         self.log = []
         self.host_list = dict()
         self.geoip_list = []
         self.load_config()
         self.load_lists()
-
-    def serve_forever(self):
-        core.__init__(self)
+        yashmak_core.__init__(self)
 
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
@@ -398,5 +463,10 @@ class yashmak(core):
 
 
 if __name__ == '__main__':
-    server = yashmak()
-    server.serve_forever()
+    process1 = multiprocessing.Process(target=yashmak)
+    process1.daemon = True
+    process1.start()
+    time.sleep(1)
+    if not process1.is_alive():
+        raise Exception
+    process1.join()
