@@ -41,6 +41,11 @@ system_config(){
   echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_keepalive_time=600" >> /etc/sysctl.conf
   echo "net.core.somaxconn=262114" >> /etc/sysctl.conf
+  echo "net.ipv4.icmp_echo_ignore_all=1" >> /etc/sysctl.conf
+  echo "net.ipv4.ip_default_ttl = 128" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_adv_win_scale=3" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_max_syn_backlog=8192" >> /etc/sysctl.conf
+  echo "net.nf_conntrack_max = 2000000" >> /etc/sysctl.conf
   sysctl -p
   apt-get install resolvconf -y
   echo "dns-nameservers 1.1.1.1" >> /etc/network/interfaces
@@ -109,6 +114,8 @@ install_Yashmak(){
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
   apt-get install python3.8 -y
+  apt-get install python3-pip -y
+  pip3 install dnspython3 -y
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
