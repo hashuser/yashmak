@@ -24,6 +24,8 @@ sudo Yashmak_uninstall
 ```
 sudo systemctl restart Yashmak
 ```
+## Yashmak服务端架构
+![image](https://github.com/hashuser/yashmak/raw/master/recourse/2021-01-23%20190454.png)
 ## Yashmak项目思路
 * **不使用非必要的额外加密手段**
   * 截止2020/04/15全球约85%[<sup>[Chrome浏览器统计数据]</sup>](https://transparencyreport.google.com/https)的站点使用了TLS/SSL，因此浏览器已对此部分流量进行了1次加密。考虑到可能存在的SNI阻断，以及20%的未使用加密的站点，Yashmak使用TLS1.3(X25519,AES_256_GCM)对所有流量实行了2次加密。不同于Shadowsocks或其他项目的是，Yashmak即不使用任何私有加密算法，也不会使用预共享密钥对流量使用对称加密算法进行加密。
