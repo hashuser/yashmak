@@ -10,34 +10,28 @@ import ipaddress
 import traceback
 import gzip
 import time
+import random
 
-class yashmak_core():
-    def __init__(self):
+class yashmak_worker():
+    def __init__(self,port,config,host_list,geoip_list,exception_list_name,local_path,utc_difference,start_time):
+        self.config = config
         self.loop = asyncio.get_event_loop()
-        if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
-                                            dualstack_ipv6=True)
-        else:
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
+        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET,dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_context())
-        self.init()
+        self.host_list = host_list
+        self.geoip_list = geoip_list
+        self.exception_list_name = exception_list_name
+        self.local_path = local_path 
+        self.utc_difference = utc_difference
+        self.start_time = start_time
         self.dns_pool = dict()
         self.dns_ttl = dict()
+        self.log = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
         self.loop.run_forever()
-
-    def init(self):
-        s = socket.create_connection(('amazon.com', 443))
-        ss = ssl.wrap_socket(s, server_side=False)
-        ss.send(b'095fd1ca80a444b586d769cbf652478d')
-        utc = time.mktime(time.strptime(str(ss.read(65535).split(b'\r\n')[2][6:])[2:-1],'%a, %d %b %Y %H:%M:%S GMT'))
-        ss.close()
-        self.utc_difference = utc - time.time()
-        self.start_time = time.localtime()
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -295,33 +289,23 @@ class yashmak_core():
         self.host_list[uuid].add(host)
 
     async def write_host(self):
-        def decode(host):
-            return host.decode('utf-8')
-
-        def encode(host):
-            return host.encode('utf-8')
-
         while True:
             for x in self.host_list:
                 if x != b'blacklist' and len(self.host_list[x]) > 0:
-                    if os.path.exists(self.local_path + '/Cache/' + x.decode('utf-8') + '.json'):
-                        with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'r') as file:
-                            data = json.load(file)
-                            data = list(map(encode, data))
-                        for y in data:
-                            self.host_list[x].add(y)
-                    with open(self.local_path + '/Cache/' + x.decode('utf-8') + '.json', 'w') as file:
-                        json.dump(list(map(decode, list(self.host_list[x]))), file)
+                    server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1', port=self.config['port']+1)
+                    server_writer.write(str(list(self.host_list[x])).encode('utf-8')+b'\r\n'+x+b'\r\nhost\r\n\r\n')
+                    await server_writer.drain()
+                    await self.clean_up(None, server_writer)
                     self.host_list[x].clear()
             await asyncio.sleep(60)
 
     async def write_log(self):
-        if not os.path.exists(self.local_path + '/Logs/'):
-            os.makedirs(self.local_path + '/Logs/')
         while True:
-            with open(self.local_path + '/Logs/' + time.strftime("%Y%m%d%H%M%S", self.start_time) + '.json', 'a+') as file:
-                for x in self.log:
-                    file.write(x+'\n\n')
+            if len(self.log) > 0:
+                server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1',port=self.config['port'] + 1)
+                server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
+                await server_writer.drain()
+                await self.clean_up(None, server_writer)
                 self.log.clear()
             await asyncio.sleep(60)
 
@@ -400,14 +384,189 @@ class yashmak_core():
                 if E - S > 1.5:
                     break
 
-class yashmak(yashmak_core):
-    def __init__(self):
+
+class yashmak_log():
+    def __init__(self,start_time,local_path, port):
+        self.loop = asyncio.get_event_loop()
+        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+        self.host_list = dict()
         self.log = []
+        self.local_path = local_path
+        self.start_time = start_time
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(server)
+        self.loop.create_task(self.write_host())
+        self.loop.create_task(self.write_log())
+        self.loop.run_forever()
+    
+    async def handler(self, client_reader, client_writer):
+        try:
+            data = b''
+            while True:
+                data += await client_reader.read(65536)
+                if data[-4:] == b'\r\n\r\n':
+                    data, key, instruction = data[:-4].decode('utf-8').split('\r\n')
+                    break
+            if instruction == 'host':
+                data = data[1:-1]
+                data = data.replace("b'", '')
+                data = data.replace("'", '')
+                data = data.split(', ')
+                if key not in self.host_list:
+                    self.host_list[key] = set()
+                for x in data:
+                    self.host_list[key].add(x)
+            elif instruction == 'log':
+                data = data[1:-1]
+                data = data.replace('"', '')
+                data = data.replace('),', ')),')
+                data = data.split('), ')
+                for x in data:
+                    self.log.append(x)
+            await self.clean_up(client_writer, None)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(client_writer, None)
+    
+    async def write_host(self):
+        while True:
+            for x in self.host_list:
+                if x != 'blacklist' and len(self.host_list[x]) > 0:
+                    if os.path.exists(self.local_path + '/Cache/' + x + '.json'):
+                        with open(self.local_path + '/Cache/' + x + '.json', 'r') as file:
+                            data = json.load(file)
+                        for y in data:
+                            self.host_list[x].add(y)
+                    with open(self.local_path + '/Cache/' + x + '.json', 'w') as file:
+                        json.dump(list(self.host_list[x]), file)
+                    self.host_list[x].clear()
+            await asyncio.sleep(60)
+
+    async def write_log(self):
+        if not os.path.exists(self.local_path + '/Logs/'):
+            os.makedirs(self.local_path + '/Logs/')
+        while True:
+            with open(self.local_path + '/Logs/' + time.strftime("%Y%m%d%H%M%S", self.start_time) + '.json', 'a+') as file:
+                for x in self.log:
+                    file.write(x+'\n\n')
+                self.log.clear()
+            await asyncio.sleep(60)
+    
+    async def clean_up(self, writer1=None, writer2=None):
+        try:
+            writer1.close()
+            await writer1.wait_closed()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
+            writer2.close()
+            await writer2.wait_closed()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+
+    def exception_handler(self, loop, context):
+        pass
+
+
+class yashmak_proxy():
+    def __init__(self,config,workers):
+        self.config = config
+        self.loop = asyncio.get_event_loop()
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
+                                            dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+        self.workers = workers
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(server)
+        self.loop.run_forever()
+
+    async def handler(self, client_reader, client_writer):
+        try:
+            server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1', port=self.workers[random.randint(0, len(self.workers) - 1)])
+            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
+                                 self.switch(server_reader, client_writer, server_writer))
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(client_writer, None)
+    
+    async def switch(self, reader, writer, other):
+        try:
+            while True:
+                data = await reader.read(32768)
+                writer.write(data)
+                await writer.drain()
+                if data == b'':
+                    break
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(writer, other)
+        finally:
+            await self.clean_up(writer, other)
+
+    async def clean_up(self, writer1=None, writer2=None):
+        try:
+            writer1.close()
+            await writer1.wait_closed()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
+            writer2.close()
+            await writer2.wait_closed()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+
+    def exception_handler(self, loop, context):
+        pass
+
+class yashmak():
+    def __init__(self):
         self.host_list = dict()
         self.geoip_list = []
         self.load_config()
         self.load_lists()
-        yashmak_core.__init__(self)
+        self.get_time()
+
+    def run_forever(self):
+        tasks = []
+        workers = []
+        #start log server
+        p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
+        p.start()
+        tasks.append(p)
+        #start workers
+        for x in range(os.cpu_count()):
+            p = multiprocessing.Process(target=yashmak_worker,args=(self.config['port']+2+x,self.config,self.host_list,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
+            p.start()
+            tasks.append(p)
+            workers.append(self.config['port']+2+x)
+        #start proxy
+        p = multiprocessing.Process(target=yashmak_proxy,args=(self.config,workers))
+        p.start()
+        tasks.append(p)
+        for x in tasks:
+            x.join()
+
+    def get_time(self):
+        s = socket.create_connection(('amazon.com', 443))
+        ss = ssl.wrap_socket(s, server_side=False)
+        ss.send(b'095fd1ca80a444b586d769cbf652478d')
+        utc = time.mktime(time.strptime(str(ss.read(65535).split(b'\r\n')[2][6:])[2:-1],'%a, %d %b %Y %H:%M:%S GMT'))
+        ss.close()
+        self.utc_difference = utc - time.time()
+        self.start_time = time.localtime()
 
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
@@ -463,10 +622,5 @@ class yashmak(yashmak_core):
 
 
 if __name__ == '__main__':
-    process1 = multiprocessing.Process(target=yashmak)
-    process1.daemon = True
-    process1.start()
-    time.sleep(1)
-    if not process1.is_alive():
-        raise Exception
-    process1.join()
+    server = yashmak()
+    server.run_forever()
