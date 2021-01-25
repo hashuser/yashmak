@@ -10,13 +10,18 @@ import ipaddress
 import traceback
 import gzip
 import time
-import random
+
 
 class yashmak_worker():
-    def __init__(self,port,config,host_list,geoip_list,exception_list_name,local_path,utc_difference,start_time):
+    def __init__(self,config,host_list,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
         self.loop = asyncio.get_event_loop()
-        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET,dualstack_ipv6=False)
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
+                                            reuse_port=True,dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
+                                            reuse_port=True,dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_context())
         self.host_list = host_list
         self.geoip_list = geoip_list
@@ -473,64 +478,6 @@ class yashmak_log():
         pass
 
 
-class yashmak_proxy():
-    def __init__(self,config,workers):
-        self.config = config
-        self.loop = asyncio.get_event_loop()
-        if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
-                                            dualstack_ipv6=True)
-        else:
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
-        self.workers = workers
-        self.loop.set_exception_handler(self.exception_handler)
-        self.loop.create_task(server)
-        self.loop.run_forever()
-
-    async def handler(self, client_reader, client_writer):
-        try:
-            server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1', port=self.workers[random.randint(0, len(self.workers) - 1)])
-            await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                 self.switch(server_reader, client_writer, server_writer))
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
-            await self.clean_up(client_writer, None)
-    
-    async def switch(self, reader, writer, other):
-        try:
-            while True:
-                data = await reader.read(32768)
-                writer.write(data)
-                await writer.drain()
-                if data == b'':
-                    break
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
-            await self.clean_up(writer, other)
-        finally:
-            await self.clean_up(writer, other)
-
-    async def clean_up(self, writer1=None, writer2=None):
-        try:
-            writer1.close()
-            await writer1.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
-        try:
-            writer2.close()
-            await writer2.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
-
-    def exception_handler(self, loop, context):
-        pass
-
 class yashmak():
     def __init__(self):
         self.host_list = dict()
@@ -540,24 +487,13 @@ class yashmak():
         self.get_time()
 
     def run_forever(self):
-        tasks = []
-        workers = []
         #start log server
         p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
         p.start()
-        tasks.append(p)
         #start workers
         for x in range(os.cpu_count()):
-            p = multiprocessing.Process(target=yashmak_worker,args=(self.config['port']+2+x,self.config,self.host_list,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
+            p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
-            tasks.append(p)
-            workers.append(self.config['port']+2+x)
-        #start proxy
-        p = multiprocessing.Process(target=yashmak_proxy,args=(self.config,workers))
-        p.start()
-        tasks.append(p)
-        for x in tasks:
-            x.join()
 
     def get_time(self):
         s = socket.create_connection(('amazon.com', 443))
