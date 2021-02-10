@@ -123,6 +123,7 @@ install_Yashmak(){
   apt-get install python3.8 -y
   apt-get install python3-pip -y
   pip3 install dnspython3 -y
+  pip3 install uvloop -y
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
