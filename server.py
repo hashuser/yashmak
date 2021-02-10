@@ -10,8 +10,9 @@ import ipaddress
 import traceback
 import gzip
 import time
+import uvloop
 
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 class yashmak_worker():
     def __init__(self,config,host_list,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
@@ -157,15 +158,13 @@ class yashmak_worker():
         try:
             while True:
                 data = await reader.read(32768)
+                if data == b'':
+                    raise Exception
                 writer.write(data)
                 await writer.drain()
-                if data == b'':
-                    break
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
-            await self.clean_up(writer, other)
-        finally:
             await self.clean_up(writer, other)
 
     async def TCP_ping(self, writer, reader):
@@ -178,6 +177,7 @@ class yashmak_worker():
             e.__traceback__ = None
             await self.clean_up(writer)
         finally:
+            await asyncio.sleep(5)
             await self.clean_up(writer)
 
     async def redirect(self, writer, host, uuid):
@@ -221,13 +221,23 @@ class yashmak_worker():
     async def clean_up(self, writer1=None, writer2=None):
         try:
             writer1.close()
-            await writer1.wait_closed()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
             writer2.close()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
+            await writer1.wait_closed()
+            writer1 = None
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
             await writer2.wait_closed()
+            writer2 = None
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
