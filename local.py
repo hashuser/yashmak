@@ -31,6 +31,7 @@ class yashmak_core():
             self.dns_ttl = dict()
             self.loop.set_exception_handler(self.exception_handler)
             self.loop.create_task(server)
+            #self.loop.create_task(self.TCP_ping())
             self.loop.create_task(self.pool())
             self.loop.create_task(self.pool_health())
             self.loop.create_task(self.update_white_list())
@@ -61,21 +62,20 @@ class yashmak_core():
             if not up:
                 while True:
                     data = await reader.read(16384)
+                    if data == b'':
+                        raise Exception
                     writer.write(data)
                     await writer.drain()
-                    if data == b'':
-                        break
             else:
                 while True:
                     data = await reader.read(65536)
+                    if data == b'':
+                        raise Exception
                     if data[:3] == b'GET' or data[:4] == b'POST':
                         URL, host, port = self.get_http_address_new(data, 1)
                         data = self.get_response(data, host, port)
                     writer.write(data)
                     await writer.drain()
-                    if data == b'':
-                        break
-            await self.clean_up(writer, other)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -108,16 +108,17 @@ class yashmak_core():
         try:
             if not type:
                 address = await self.resolve('A',host)
-            if type or not self.is_china_ip(address):
+            if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
                 if len(self.connection_pool) == 0:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
                                                                                  ssl=self.context,
-                                                                                 server_hostname=self.config['host'])
+                                                                                 server_hostname=self.config['host'],
+                                                                                 ssl_handshake_timeout=5)
                     server_writer.write(self.config['uuid'])
                     await server_writer.drain()
                 else:
-                    server_reader, server_writer = self.connection_pool.pop(0)
+                    server_reader, server_writer = self.connection_pool.pop(-1)
                 server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
                 await server_writer.drain()
                 server_writer.write(host + b'\n' + port + b'\n')
@@ -148,58 +149,93 @@ class yashmak_core():
     async def clean_up(self, writer1=None, writer2=None):
         try:
             writer1.close()
-            await writer1.wait_closed()
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
         try:
             writer2.close()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
+            await writer1.wait_closed()
+            writer1 = None
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+        try:
             await writer2.wait_closed()
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
+            writer2 = None
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
 
     async def pool(self):
         pool_max_size = 16
-        self.unhealthy = 0
+        self.is_checking = 0
         while True:
-            while len(self.connection_pool) < pool_max_size:
+            while len(self.connection_pool) + self.is_checking < pool_max_size:
                 try:
                     server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                                  port=self.config['port'],
                                                                                  ssl=self.context,
-                                                                                 server_hostname=self.config['host'])
+                                                                                 server_hostname=self.config['host'],
+                                                                                 ssl_handshake_timeout=5)
                     server_writer.write(self.config['uuid'])
                     await server_writer.drain()
                     self.connection_pool.append((server_reader, server_writer))
                 except Exception as error:
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
-            self.unhealthy = 0
+                    await asyncio.sleep(0.1)
             await asyncio.sleep(1)
-            if len(self.connection_pool) + self.unhealthy < (pool_max_size / 5):
+            if len(self.connection_pool) + self.is_checking < (pool_max_size / 5):
                 pool_max_size = round(pool_max_size * 2)
 
     async def pool_health(self):
+        self.slow_mode = True
+        self.unhealthy = 0
         while True:
-            for x in self.connection_pool:
-                self.loop.create_task(self.check_health(x))
-            for x in range(10):
-                S = time.time()
-                await asyncio.sleep(0.5)
-                E = time.time()
-                if E - S > 1.5:
-                    break
+            try:
+                for x in list(self.connection_pool):
+                    try:
+                        self.connection_pool.remove(x)
+                        self.is_checking += 1
+                        self.loop.create_task(self.check_health(x))
+                        if self.slow_mode and self.unhealthy < ((len(self.connection_pool)+self.is_checking)*0.05 + 4):
+                            await asyncio.sleep(0.1)
+                    except Exception as error:
+                        traceback.clear_frames(error.__traceback__)
+                        error.__traceback__ = None
+                self.slow_mode = True
+                self.unhealthy = 0
+                await self.sleep()
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+
+    async def sleep(self):
+        for x in range(10):
+            S = time.time()
+            await asyncio.sleep(0.5)
+            E = time.time()
+            if E - S > 1.5:
+                self.slow_mode = False
+                break
 
     async def check_health(self, x):
         try:
-            x[1].write(int.to_bytes(0, 2, 'big', signed=True))
+            x[1].write(int.to_bytes(-4, 2, 'big', signed=True))
             await x[1].drain()
+            if (await asyncio.wait_for(x[0].read(1024),5)) == b'':
+                raise Exception
+            self.connection_pool.append(x)
+            self.is_checking -= 1
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            self.connection_pool.remove(x)
             self.unhealthy += 1
+            self.is_checking -= 1
             await self.clean_up(x[0], x[1])
 
     async def update_white_list(self):
@@ -210,7 +246,8 @@ class yashmak_core():
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
                                                                              ssl=self.context,
-                                                                             server_hostname=self.config['host'])
+                                                                             server_hostname=self.config['host'],
+                                                                             ssl_handshake_timeout=5)
                 server_writer.write(self.config['uuid'])
                 await server_writer.drain()
                 server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
@@ -265,6 +302,8 @@ class yashmak_core():
     def get_type(self, host):
         if self.config['mode'] == 'global':
             return True
+        elif self.config['mode'] == 'direct':
+            return False
         elif self.config['mode'] == 'auto':
             ip = self.is_ip(host)
             if not ip and self.in_it(host, self.black_list):
@@ -449,6 +488,36 @@ class yashmak_core():
                 E = time.time()
                 if E - S > 1.5:
                     break
+
+    async def TCP_ping(self):
+        try:
+            t_t = 0
+            t_c = 0
+            while True:
+                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                             port=self.config['port'],
+                                                                             ssl=self.context,
+                                                                             server_hostname=self.config['host'],
+                                                                             ssl_handshake_timeout=5)
+                server_writer.write(self.config['uuid'])
+                await server_writer.drain()
+                server_writer.write(int.to_bytes(-2, 2, 'big', signed=True))
+                await server_writer.drain()
+                s_t = time.perf_counter_ns()
+                server_writer.write(int.to_bytes(s_t, 8, 'big', signed=True))
+                await server_writer.drain()
+                await asyncio.wait_for(server_reader.read(8), 20)
+                r_t = time.perf_counter_ns()
+                t_t += (r_t - s_t) / 1000000
+                t_c += 1
+                print('This Ping:',round((r_t - s_t) / 1000000, 1), 'ms   Avarage:',round(t_t / t_c, 1),'ms')
+                await asyncio.sleep(1)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            await self.clean_up(server_writer)
+        finally:
+            await self.clean_up(server_writer)
 
 
 class yashmak(yashmak_core):
@@ -647,8 +716,9 @@ def react(message):
         b.setIconVisibleInMenu(True)
         c.setIconVisibleInMenu(False)
     elif message == 'Direct':
-        exit()
+        kill()
         edit_config('mode','direct')
+        run()
         if language == 'zh-Hans-CN':
             tp.showMessage('Yashmak', '已设置为直连模式', msecs=1000)
         else:
@@ -689,7 +759,7 @@ def react(message):
             else:
                 tp.showMessage('Yashmak', 'Auto startup has been disabled', msecs=1000)
         else:
-            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Yashmak.exe"
+            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Verify.exe"
             location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
             try:
                 os.remove(location)
@@ -746,7 +816,7 @@ def init():
         b.setIconVisibleInMenu(False)
         c.setIconVisibleInMenu(True)
     if config['startup'].lower() == 'auto':
-        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Yashmak.exe"
+        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Verify.exe"
         d.setIcon(QtGui.QIcon('correct.svg'))
     elif config['startup'].lower() == 'manual':
         target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Recover.exe"
