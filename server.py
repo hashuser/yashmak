@@ -69,6 +69,8 @@ class yashmak_worker():
                     await self.TCP_ping(client_writer, client_reader)
                 elif data == -3:
                     await self.updater(client_writer, uuid, True)
+                elif data == -4:
+                    await self.echo(client_writer, client_reader)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
@@ -178,6 +180,15 @@ class yashmak_worker():
             await self.clean_up(writer)
         finally:
             await asyncio.sleep(5)
+            await self.clean_up(writer)
+
+    async def echo(self, writer, reader):
+        try:
+            writer.write(b'ok')
+            await writer.drain()
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
             await self.clean_up(writer)
 
     async def redirect(self, writer, host, uuid):
