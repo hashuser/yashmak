@@ -10,6 +10,7 @@ import ipaddress
 import traceback
 import gzip
 import time
+import ntplib
 import uvloop
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -60,7 +61,7 @@ class yashmak_worker():
                     await self.redirect(client_writer, host, uuid)
                     address = await self.resolve('A',host)
                     self.is_china_ip(address, host, uuid)
-                    server_reader, server_writer = await asyncio.open_connection(host=address, port=port)
+                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port),5)
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
@@ -318,7 +319,7 @@ class yashmak_worker():
         while True:
             for x in self.host_list:
                 if x != b'blacklist' and len(self.host_list[x]) > 0:
-                    server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1', port=self.config['port']+1)
+                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1', port=self.config['port']+1),5)
                     server_writer.write(str(list(self.host_list[x])).encode('utf-8')+b'\r\n'+x+b'\r\nhost\r\n\r\n')
                     await server_writer.drain()
                     await self.clean_up(None, server_writer)
@@ -328,7 +329,7 @@ class yashmak_worker():
     async def write_log(self):
         while True:
             if len(self.log) > 0:
-                server_reader, server_writer = await asyncio.open_connection(host='127.0.0.1',port=self.config['port'] + 1)
+                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1',port=self.config['port'] + 1),5)
                 server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
                 await server_writer.drain()
                 await self.clean_up(None, server_writer)
@@ -517,12 +518,16 @@ class yashmak():
             p.start()
 
     def get_time(self):
-        s = socket.create_connection(('amazon.com', 443))
-        ss = ssl.wrap_socket(s, server_side=False)
-        ss.send(b'095fd1ca80a444b586d769cbf652478d')
-        utc = time.mktime(time.strptime(str(ss.read(65535).split(b'\r\n')[2][6:])[2:-1],'%a, %d %b %Y %H:%M:%S GMT'))
-        ss.close()
-        self.utc_difference = utc - time.time()
+        client = ntplib.NTPClient()
+        offset = None
+        while offset == None:
+            try:
+                response = client.request('pool.ntp.org', version=3, timeout=1)
+                offset = response.offset
+            except Exception as e:
+                traceback.clear_frames(e.__traceback__)
+                e.__traceback__ = None
+        self.utc_difference = offset
         self.start_time = time.localtime()
 
     def load_config(self):
