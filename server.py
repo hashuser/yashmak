@@ -38,6 +38,7 @@ class yashmak_worker():
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
+        self.loop.create_task(self.updater_cache())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -52,7 +53,7 @@ class yashmak_worker():
                 raise Exception
             data = 0
             while True:
-                data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),40)), 'big',signed=True)
+                data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),20)), 'big',signed=True)
                 if data == 0:
                     continue
                 elif data > 0:
@@ -213,43 +214,61 @@ class yashmak_worker():
         try:
             if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
                 raise Exception
-            if os.path.exists(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json'):
-                with open(self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json', 'rb') as file:
-                    content = file.read()
+            if (uuid + b'_compressed') in self.exception_list_cache and (uuid + b'_normal') in self.exception_list_cache:
                 if compress:
-                    content = gzip.compress(content, gzip._COMPRESS_LEVEL_FAST)
-                writer.write(content)
+                    writer.write(self.exception_list_cache[uuid + b'_compressed'])
+                else:
+                    writer.write(self.exception_list_cache[uuid + b'_normal'])
                 await writer.drain()
             else:
                 writer.write(b'\n')
                 await writer.drain()
+            await self.clean_up(writer)
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
-            await self.clean_up(writer, file)
-        finally:
-            await self.clean_up(writer, file)
-
+            await self.clean_up(writer)
+    
+    async def updater_cache(self):
+        try:
+            self.exception_list_cache = dict()
+            while True:
+                for uuid in self.config['uuid']:
+                    path = self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json'
+                    if os.path.exists(path):
+                        with open(path, 'rb') as file:
+                            content = file.read()
+                            self.exception_list_cache[uuid + b'_normal'] = content
+                            self.exception_list_cache[uuid + b'_compressed'] = gzip.compress(content, 2)
+                await asyncio.sleep(60)
+        except Exception as e:
+            traceback.clear_frames(e.__traceback__)
+            e.__traceback__ = None
+            
     async def clean_up(self, writer1=None, writer2=None):
         try:
-            writer1.close()
+            if writer1 != None:
+                writer1.close()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            writer2.close()
+            if writer2 != None:
+                writer2.close()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            await writer1.wait_closed()
-            writer1 = None
+            if writer1 != None:
+                await writer1.wait_closed()
+                writer1 = None
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            await writer2.wait_closed()
-            writer2 = None
+            if writer2 != None:
+                await writer2.wait_closed()
+                writer2 = None
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
