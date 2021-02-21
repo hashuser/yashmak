@@ -35,6 +35,7 @@ class yashmak_core():
             self.loop.create_task(self.pool())
             self.loop.create_task(self.pool_health())
             self.loop.create_task(self.update_white_list())
+            self.loop.create_task(self.clear_cache())
             self.loop.run_forever()
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -125,11 +126,11 @@ class yashmak_core():
                 await server_writer.drain()
             elif address != '127.0.0.1':
                 try:
-                    server_reader, server_writer = await asyncio.open_connection(host=address, port=port)
+                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port),5)
                 except Exception as error:
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
-                    server_reader, server_writer = await asyncio.open_connection(host=address.replace(b'::ffff:', b''),port=port)
+                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address.replace(b'::ffff:', b''),port=port),5)
             elif not request_type:
                 client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
                 await client_writer.drain()
@@ -148,49 +149,61 @@ class yashmak_core():
 
     async def clean_up(self, writer1=None, writer2=None):
         try:
-            writer1.close()
+            if writer1 != None:
+                writer1.close()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            writer2.close()
+            if writer2 != None:
+                writer2.close()
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            await writer1.wait_closed()
-            writer1 = None
+            if writer1 != None:
+                await writer1.wait_closed()
+                writer1 = None
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
         try:
-            await writer2.wait_closed()
-            writer2 = None
+            if writer2 != None:
+                await writer2.wait_closed()
+                writer2 = None
         except Exception as e:
             traceback.clear_frames(e.__traceback__)
             e.__traceback__ = None
 
     async def pool(self):
-        pool_max_size = 16
+        self.pool_max_size = 16
         self.is_checking = 0
+        self.is_connecting = 0
         while True:
-            while len(self.connection_pool) + self.is_checking < pool_max_size:
+            for x in range(self.pool_max_size-(len(self.connection_pool) + self.is_checking + self.is_connecting)):
                 try:
-                    server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                                 port=self.config['port'],
-                                                                                 ssl=self.context,
-                                                                                 server_hostname=self.config['host'],
-                                                                                 ssl_handshake_timeout=5)
-                    server_writer.write(self.config['uuid'])
-                    await server_writer.drain()
-                    self.connection_pool.append((server_reader, server_writer))
+                    self.loop.create_task(self.make_connections())
+                    self.is_connecting += 1
                 except Exception as error:
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
-                    await asyncio.sleep(0.1)
-            await asyncio.sleep(1)
-            if len(self.connection_pool) + self.is_checking < (pool_max_size / 5):
-                pool_max_size = round(pool_max_size * 2)
+            await asyncio.sleep(0.5)
+
+    async def make_connections(self):
+        try:
+            server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                         port=self.config['port'],
+                                                                         ssl=self.context,
+                                                                         server_hostname=self.config['host'],
+                                                                         ssl_handshake_timeout=5)
+            server_writer.write(self.config['uuid'])
+            await server_writer.drain()
+            self.connection_pool.append((server_reader, server_writer))
+            self.is_connecting -= 1
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            self.is_connecting -= 1
 
     async def pool_health(self):
         self.slow_mode = True
@@ -234,8 +247,8 @@ class yashmak_core():
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            self.unhealthy += 1
             self.is_checking -= 1
+            self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
     async def update_white_list(self):
@@ -275,7 +288,7 @@ class yashmak_core():
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer, file)
+                await self.clean_up(server_writer)
             await asyncio.sleep(60)
 
     def exception_handler(self, loop, context):
@@ -478,16 +491,20 @@ class yashmak_core():
 
     async def clear_cache(self):
         while True:
-            for x in list(self.dns_pool.keys()):
-                if (time.time() - self.dns_ttl[x]) > 600:
-                    del self.dns_pool[x]
-                    del self.dns_ttl[x]
-            for x in range(600):
-                S = time.time()
-                await asyncio.sleep(0.5)
-                E = time.time()
-                if E - S > 1.5:
-                    break
+            try:
+                for x in list(self.dns_pool.keys()):
+                    if (time.time() - self.dns_ttl[x]) > 600:
+                        del self.dns_pool[x]
+                        del self.dns_ttl[x]
+                for x in range(600):
+                    S = time.time()
+                    await asyncio.sleep(0.5)
+                    E = time.time()
+                    if E - S > 1.5:
+                        break
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
 
     async def TCP_ping(self):
         try:
@@ -649,16 +666,26 @@ def enable_loopback_UWPs():
             error.__traceback__ = None
 
 def is_light_Theme():
-    os.popen("CheckNetIsolation.exe loopbackexempt -c")
-    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize',0, winreg.KEY_ALL_ACCESS)
-    value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'SystemUsesLightTheme')
-    return value
+    try:
+        os.popen("CheckNetIsolation.exe loopbackexempt -c")
+        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize', 0,winreg.KEY_ALL_ACCESS)
+        value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'SystemUsesLightTheme')
+        return value
+    except Exception as error:
+        traceback.clear_frames(error.__traceback__)
+        error.__traceback__ = None
+        return True
 
 def detect_language():
-    os.popen("CheckNetIsolation.exe loopbackexempt -c")
-    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Control Panel\International\User Profile',0, winreg.KEY_ALL_ACCESS)
-    value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'Languages')
-    return value
+    try:
+        os.popen("CheckNetIsolation.exe loopbackexempt -c")
+        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Control Panel\International\User Profile', 0,winreg.KEY_ALL_ACCESS)
+        value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'Languages')
+        return value
+    except Exception as error:
+        traceback.clear_frames(error.__traceback__)
+        error.__traceback__ = None
+        return ['']
 
 def kill():
     global process1
