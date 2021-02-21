@@ -24,7 +24,7 @@ sudo Yashmak_uninstall
 ```
 sudo systemctl restart Yashmak
 ```
-### 更新OpenSSL(Ubuntu 18.04TLS+)
+### OpenSSL更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_openssl.sh | bash
 ``` 
