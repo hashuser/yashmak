@@ -39,6 +39,7 @@ class yashmak_worker():
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
         self.loop.create_task(self.updater_cache())
+        self.loop.create_task(self.clear_cache())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -419,16 +420,15 @@ class yashmak_worker():
 
     async def clear_cache(self):
         while True:
-            for x in list(self.dns_pool.keys()):
-                if (time.time() - self.dns_ttl[x]) > 600:
-                    del self.dns_pool[x]
-                    del self.dns_ttl[x]
-            for x in range(600):
-                S = time.time()
-                await asyncio.sleep(0.5)
-                E = time.time()
-                if E - S > 1.5:
-                    break
+            try:
+                for x in list(self.dns_pool.keys()):
+                    if (time.time() - self.dns_ttl[x]) > 600:
+                        del self.dns_pool[x]
+                        del self.dns_ttl[x]
+                await asyncio.sleep(300)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
 
 
 class yashmak_log():
