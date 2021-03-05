@@ -151,29 +151,29 @@ class yashmak_core():
         try:
             if writer1 != None:
                 writer1.close()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer2 != None:
                 writer2.close()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer1 != None:
                 await writer1.wait_closed()
                 writer1 = None
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
                 writer2 = None
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     async def pool(self):
         self.pool_max_size = 16
@@ -529,9 +529,9 @@ class yashmak_core():
                 t_c += 1
                 print('This Ping:',round((r_t - s_t) / 1000000, 1), 'ms   Avarage:',round(t_t / t_c, 1),'ms')
                 await asyncio.sleep(1)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(server_writer)
         finally:
             await self.clean_up(server_writer)
