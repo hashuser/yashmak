@@ -412,11 +412,14 @@ class yashmak_worker():
             await self.clean_up(s, None)
 
     def decode(self,result,type):
-        result = result.split('\n')[6:]
         type = ' ' + type.upper() + ' '
-        for x in result:
-            if type in x:
-                return x.split(' ')[-1].encode('utf-8')
+        position = result.find(type)
+        if position < 0:
+            return None
+        result = result[position + len(type):result.find('\n', position)]
+        if result[-1] == '.':
+            result = result[:-1]
+        return result.encode('utf-8')
 
     async def clear_cache(self):
         while True:
