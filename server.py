@@ -74,9 +74,9 @@ class yashmak_worker():
                     await self.updater(client_writer, uuid, True)
                 elif data == -4:
                     await self.echo(client_writer, client_reader)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
     def HTTP_header_decoder(self, header):
@@ -154,9 +154,9 @@ class yashmak_worker():
             elif type == 4042:
                 writer.write(b'''<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
             await writer.drain()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(None, writer)
 
     async def switch(self, reader, writer, other):
@@ -167,9 +167,9 @@ class yashmak_worker():
                     raise Exception
                 writer.write(data)
                 await writer.drain()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer, other)
 
     async def TCP_ping(self, writer, reader):
@@ -177,9 +177,9 @@ class yashmak_worker():
             time = await asyncio.wait_for(reader.read(8), 20)
             writer.write(time)
             await writer.drain()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer)
         finally:
             await asyncio.sleep(5)
@@ -189,9 +189,9 @@ class yashmak_worker():
         try:
             writer.write(b'ok')
             await writer.drain()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer)
 
     async def redirect(self, writer, host, uuid):
@@ -206,9 +206,9 @@ class yashmak_worker():
                     writer.write(b'''HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n''')
                 await writer.drain()
                 await self.clean_up(writer)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer)
 
     async def updater(self, writer, uuid, compress=False):
@@ -225,9 +225,9 @@ class yashmak_worker():
                 writer.write(b'\n')
                 await writer.drain()
             await self.clean_up(writer)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(writer)
     
     async def updater_cache(self):
@@ -242,37 +242,37 @@ class yashmak_worker():
                             self.exception_list_cache[uuid + b'_normal'] = content
                             self.exception_list_cache[uuid + b'_compressed'] = gzip.compress(content, 2)
                 await asyncio.sleep(60)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             
     async def clean_up(self, writer1=None, writer2=None):
         try:
             if writer1 != None:
                 writer1.close()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer2 != None:
                 writer2.close()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer1 != None:
                 await writer1.wait_closed()
                 writer1 = None
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
                 writer2 = None
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     def exception_handler(self, loop, context):
         pass
@@ -291,9 +291,9 @@ class yashmak_worker():
         try:
             if b':' in host or int(host[host.rfind(b'.') + 1:]):
                 return True
-        except ValueError as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         return False
 
     def is_china_ip(self, ip, host, uuid):
@@ -472,9 +472,9 @@ class yashmak_log():
                 for x in data:
                     self.log.append(x)
             await self.clean_up(client_writer, None)
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(client_writer, None)
     
     async def write_host(self):
@@ -503,17 +503,31 @@ class yashmak_log():
     
     async def clean_up(self, writer1=None, writer2=None):
         try:
-            writer1.close()
-            await writer1.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+            if writer1 != None:
+                writer1.close()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         try:
-            writer2.close()
-            await writer2.wait_closed()
-        except Exception as e:
-            traceback.clear_frames(e.__traceback__)
-            e.__traceback__ = None
+            if writer2 != None:
+                writer2.close()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+                writer1 = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+                writer2 = None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     def exception_handler(self, loop, context):
         pass
@@ -543,9 +557,9 @@ class yashmak():
             try:
                 response = client.request('pool.ntp.org', version=3, timeout=1)
                 offset = response.offset
-            except Exception as e:
-                traceback.clear_frames(e.__traceback__)
-                e.__traceback__ = None
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
         self.utc_difference = offset
         self.start_time = time.localtime()
 
