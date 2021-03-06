@@ -1,5 +1,5 @@
 from PyQt5 import QtWidgets, QtGui, QtCore
-from dns import message, rdatatype
+from dns import message
 import asyncio
 import socket
 import ssl
@@ -72,8 +72,9 @@ class yashmak_core():
                     data = await reader.read(65536)
                     if data == b'':
                         raise Exception
-                    if data[:3] == b'GET' or data[:4] == b'POST':
-                        URL, host, port = self.get_http_address_new(data, 1)
+                    instruction = data[:4]
+                    if b'GET' in instruction or b'POST' in instruction:
+                        URL, host, port = self.get_http_address_new(data, 1, False)
                         data = self.get_response(data, host, port)
                     writer.write(data)
                     await writer.drain()
@@ -338,15 +339,14 @@ class yashmak_core():
             request_type = 3
         return request_type
 
-    def get_http_address_new(self, data, request_type):
+    def get_http_address_new(self, data, request_type, get_url=True):
         host = None
         port = None
+        URL = None
         position = data.find(b' ') + 1
         sigment = data[position:data.find(b' ', position)]
-        if request_type:
+        if request_type and get_url:
             URL = sigment.replace(b'http', b'https', 1)
-        else:
-            URL = None
         position = data.find(b'Host: ') + 6
         if position <= 5:
             return None, None, None
@@ -365,12 +365,11 @@ class yashmak_core():
     def get_http_address_old(self, data, request_type):
         host = None
         port = None
+        URL = None
         position = data.find(b' ') + 1
         sigment = data[position:data.find(b' ', position)]
         if request_type:
             URL = sigment.replace(b'http', b'https', 1)
-        else:
-            URL = None
         if request_type:
             position = sigment.find(b'//') + 2
             sigment = sigment[position:sigment.find(b'/', position)]
@@ -464,8 +463,13 @@ class yashmak_core():
 
     async def query(self,host,q_type):
         try:
-            dic = {'A': rdatatype.A, 'AAAA': rdatatype.AAAA, 'CNAME': rdatatype.CNAME}
-            query = message.make_query(host.decode('utf-8'), dic[q_type])
+            if q_type == 'A':
+                mq_type = 1
+            elif q_type == 'AAAA':
+                mq_type = 28
+            elif q_type == 'CNAME':
+                mq_type = 5
+            query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             await self.loop.sock_connect(s, ('114.114.114.114', 53))
