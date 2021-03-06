@@ -61,14 +61,14 @@ class yashmak_core():
     async def switch(self, reader, writer, other, up):
         try:
             if not up:
-                while True:
+                while 1:
                     data = await reader.read(16384)
                     if data == b'':
                         raise Exception
                     writer.write(data)
                     await writer.drain()
             else:
-                while True:
+                while 1:
                     data = await reader.read(65536)
                     if data == b'':
                         raise Exception
@@ -89,7 +89,7 @@ class yashmak_core():
                 if host in HSTS_list:
                     return True
                 sigment_length = len(host)
-                while True:
+                while 1:
                     sigment_length = host.rfind(b'.', 0, sigment_length) - 1
                     if sigment_length <= -1:
                         break
@@ -180,7 +180,7 @@ class yashmak_core():
         self.pool_max_size = 16
         self.is_checking = 0
         self.is_connecting = 0
-        while True:
+        while 1:
             for x in range(self.pool_max_size-(len(self.connection_pool) + self.is_checking + self.is_connecting)):
                 try:
                     self.loop.create_task(self.make_connections())
@@ -209,7 +209,7 @@ class yashmak_core():
     async def pool_health(self):
         self.slow_mode = True
         self.unhealthy = 0
-        while True:
+        while 1:
             try:
                 for x in list(self.connection_pool):
                     try:
@@ -253,7 +253,7 @@ class yashmak_core():
             await self.clean_up(x[0], x[1])
 
     async def update_white_list(self):
-        while True:
+        while 1:
             try:
                 server_writer = None
                 file = None
@@ -267,7 +267,7 @@ class yashmak_core():
                 server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
                 await server_writer.drain()
                 customize = b''
-                while True:
+                while 1:
                     data = await server_reader.read(8192)
                     if data == b'' or data == b'\n':
                         break
@@ -411,7 +411,7 @@ class yashmak_core():
         if host in var:
             return True
         sigment_length = len(host)
-        while True:
+        while 1:
             sigment_length = host.rfind(b'.', 0, sigment_length) - 1
             if sigment_length <= -1:
                 break
@@ -497,7 +497,7 @@ class yashmak_core():
         return result.encode('utf-8')
 
     async def clear_cache(self):
-        while True:
+        while 1:
             try:
                 for x in list(self.dns_pool.keys()):
                     if (time.time() - self.dns_ttl[x]) > 600:
@@ -517,7 +517,7 @@ class yashmak_core():
         try:
             t_t = 0
             t_c = 0
-            while True:
+            while 1:
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=self.config['port'],
                                                                              ssl=self.context,

@@ -1,6 +1,6 @@
 import asyncio
 import multiprocessing
-from dns import message, rdatatype
+from dns import message
 import socket
 import ssl
 import json
@@ -53,7 +53,7 @@ class yashmak_worker():
                 self.log.append(str((peer, str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n', '\n'))
                 raise Exception
             data = 0
-            while True:
+            while 1:
                 data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),20)), 'big',signed=True)
                 if data == 0:
                     continue
@@ -120,7 +120,7 @@ class yashmak_worker():
         return 404
 
     async def get_complete_header(self, header, reader, writer):
-        while True:
+        while 1:
             try:
                 result = self.HTTP_header_decoder(header)
                 if b'\r\n\r\n' in header and result == 404:
@@ -161,7 +161,7 @@ class yashmak_worker():
 
     async def switch(self, reader, writer, other):
         try:
-            while True:
+            while 1:
                 data = await reader.read(32768)
                 if data == b'':
                     raise Exception
@@ -233,7 +233,7 @@ class yashmak_worker():
     async def updater_cache(self):
         try:
             self.exception_list_cache = dict()
-            while True:
+            while 1:
                 for uuid in self.config['uuid']:
                     path = self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json'
                     if os.path.exists(path):
@@ -322,7 +322,7 @@ class yashmak_worker():
         if host in self.host_list[b'blacklist']:
             return host
         sigment_length = len(host)
-        while True:
+        while 1:
             sigment_length = host.rfind(b'.', 0, sigment_length) - 1
             if sigment_length <= -1:
                 break
@@ -336,7 +336,7 @@ class yashmak_worker():
         self.host_list[uuid].add(host)
 
     async def write_host(self):
-        while True:
+        while 1:
             for x in self.host_list:
                 if x != b'blacklist' and len(self.host_list[x]) > 0:
                     server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1', port=self.config['port']+1),5)
@@ -347,7 +347,7 @@ class yashmak_worker():
             await asyncio.sleep(60)
 
     async def write_log(self):
-        while True:
+        while 1:
             if len(self.log) > 0:
                 server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1',port=self.config['port'] + 1),5)
                 server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
@@ -393,8 +393,13 @@ class yashmak_worker():
 
     async def query(self,host,q_type):
         try:
-            dic = {'A': rdatatype.A, 'AAAA': rdatatype.AAAA, 'CNAME': rdatatype.CNAME}
-            query = message.make_query(host.decode('utf-8'), dic[q_type])
+            if q_type == 'A':
+                mq_type = 1
+            elif q_type == 'AAAA':
+                mq_type = 28
+            elif q_type == 'CNAME':
+                mq_type = 5
+            query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             await self.loop.sock_connect(s, ('8.8.8.8', 53))
@@ -422,7 +427,7 @@ class yashmak_worker():
         return result.encode('utf-8')
 
     async def clear_cache(self):
-        while True:
+        while 1:
             try:
                 for x in list(self.dns_pool.keys()):
                     if (time.time() - self.dns_ttl[x]) > 600:
@@ -453,7 +458,7 @@ class yashmak_log():
     async def handler(self, client_reader, client_writer):
         try:
             data = b''
-            while True:
+            while 1:
                 data += await client_reader.read(65536)
                 if data[-4:] == b'\r\n\r\n':
                     data, key, instruction = data[:-4].decode('utf-8').split('\r\n')
@@ -481,7 +486,7 @@ class yashmak_log():
             await self.clean_up(client_writer, None)
     
     async def write_host(self):
-        while True:
+        while 1:
             for x in self.host_list:
                 if x != 'blacklist' and len(self.host_list[x]) > 0:
                     if os.path.exists(self.local_path + '/Cache/' + x + '.json'):
@@ -497,7 +502,7 @@ class yashmak_log():
     async def write_log(self):
         if not os.path.exists(self.local_path + '/Logs/'):
             os.makedirs(self.local_path + '/Logs/')
-        while True:
+        while 1:
             with open(self.local_path + '/Logs/' + time.strftime("%Y%m%d%H%M%S", self.start_time) + '.json', 'a+') as file:
                 for x in self.log:
                     file.write(x+'\n\n')
