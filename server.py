@@ -33,6 +33,7 @@ class yashmak_worker():
         self.start_time = start_time
         self.dns_pool = dict()
         self.dns_ttl = dict()
+        self.ipv6 = False
         self.log = []
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
@@ -40,6 +41,7 @@ class yashmak_worker():
         self.loop.create_task(self.write_log())
         self.loop.create_task(self.updater_cache())
         self.loop.create_task(self.clear_cache())
+        self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -61,9 +63,11 @@ class yashmak_worker():
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     await self.redirect(client_writer, host, uuid)
-                    address = await self.resolve('A',host)
-                    self.is_china_ip(address, host, uuid)
-                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port),5)
+                    IPs = await self.resolve('A',host)
+                    for address in IPs:
+                        self.is_china_ip(address, host, uuid)
+                        server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
+                        break
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
                 elif data == -1:
@@ -381,24 +385,41 @@ class yashmak_worker():
         context.set_alpn_protocols(['http/1.1'])
         context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
+    
+    async def ipv6_test(self):
+        try:
+            server_writer = None
+            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='ipv6.lookup.test-ipv6.com', port=443), 5)
+            self.ipv6 = True
+            await self.clean_up(server_writer, None)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer, None)
 
     async def resolve(self,q_type,host):
         if self.is_ip(host):
-            return host
+            if not self.ipv6:
+                host = host.replace(b'::ffff:',b'')
+            return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
-            return self.dns_pool[host]
+            return self.dns_pool[host][q_type]
         else:
-            return await self.query(host, q_type)
-        await self.clean_up(client_writer, None)
+            return (await self.query(host))[q_type]
 
-    async def query(self,host,q_type):
+    async def query(self,host):
+        ipv4, ipv6 = await asyncio.gather(self.query_worker(host,'A'),self.query_worker(host,'AAAA'))
+        result = {'A':ipv4,'AAAA':ipv6}
+        self.dns_pool[host] = result
+        self.dns_ttl[host] = time.time()
+        return result
+
+    async def query_worker(self, host, q_type):
         try:
             if q_type == 'A':
                 mq_type = 1
             elif q_type == 'AAAA':
                 mq_type = 28
-            elif q_type == 'CNAME':
-                mq_type = 5
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -407,24 +428,24 @@ class yashmak_worker():
             result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
             await self.clean_up(s, None)
             result = message.from_wire(result)
-            result = self.decode(str(result), q_type)
-            self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time()
-            return result
+            return self.decode(str(result), q_type)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(s, None)
 
     def decode(self,result,type):
+        IPs = []
         type = ' ' + type.upper() + ' '
         position = result.find(type)
         if position < 0:
-            return None
-        result = result[position + len(type):result.find('\n', position)]
+            return []
+        while position > 0:
+            IPs.append(result[position + len(type):result.find('\n', position)].encode('utf-8'))
+            position = result.find(type, position + len(type))
         if result[-1] == '.':
             result = result[:-1]
-        return result.encode('utf-8')
+        return IPs
 
     async def clear_cache(self):
         while 1:
