@@ -29,6 +29,7 @@ class yashmak_core():
             self.connection_pool = []
             self.dns_pool = dict()
             self.dns_ttl = dict()
+            self.ipv6 = False
             self.loop.set_exception_handler(self.exception_handler)
             self.loop.create_task(server)
             #self.loop.create_task(self.TCP_ping())
@@ -36,6 +37,7 @@ class yashmak_core():
             self.loop.create_task(self.pool_health())
             self.loop.create_task(self.update_white_list())
             self.loop.create_task(self.clear_cache())
+            self.loop.create_task(self.ipv6_test())
             self.loop.run_forever()
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -109,39 +111,43 @@ class yashmak_core():
         server_writer = None
         try:
             if not type:
-                address = await self.resolve('A',host)
-            if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
-                if len(self.connection_pool) == 0:
-                    server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                                 port=self.config['port'],
-                                                                                 ssl=self.context,
-                                                                                 server_hostname=self.config['host'],
-                                                                                 ssl_handshake_timeout=5)
-                    server_writer.write(self.config['uuid'])
+                IPs = await self.resolve('A',host)
+            else:
+                IPs = [None]
+            for address in IPs:
+                if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
+                    if len(self.connection_pool) == 0:
+                        server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                                     port=self.config['port'],
+                                                                                     ssl=self.context,
+                                                                                     server_hostname=self.config['host'],
+                                                                                     ssl_handshake_timeout=5)
+                        server_writer.write(self.config['uuid'])
+                        await server_writer.drain()
+                    else:
+                        server_reader, server_writer = self.connection_pool.pop(-1)
+                    server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
                     await server_writer.drain()
-                else:
-                    server_reader, server_writer = self.connection_pool.pop(-1)
-                server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
-                await server_writer.drain()
-                server_writer.write(host + b'\n' + port + b'\n')
-                await server_writer.drain()
-            elif address != '127.0.0.1':
-                try:
-                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port),5)
-                except Exception as error:
-                    traceback.clear_frames(error.__traceback__)
-                    error.__traceback__ = None
-                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address.replace(b'::ffff:', b''),port=port),5)
-            elif not request_type:
-                client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
-                await client_writer.drain()
-                raise Exception
-            if not request_type:
-                client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
-                await client_writer.drain()
-            elif data != None:
-                server_writer.write(data)
-                await server_writer.drain()
+                    server_writer.write(host + b'\n' + port + b'\n')
+                    await server_writer.drain()
+                elif address != '127.0.0.1':
+                    try:
+                        server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
+                    except Exception as error:
+                        traceback.clear_frames(error.__traceback__)
+                        error.__traceback__ = None
+                        continue
+                elif not request_type:
+                    client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
+                    await client_writer.drain()
+                    raise Exception
+                if not request_type:
+                    client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
+                    await client_writer.drain()
+                elif data != None:
+                    server_writer.write(data)
+                    await server_writer.drain()
+                break
             return server_reader, server_writer
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -180,6 +186,8 @@ class yashmak_core():
         self.pool_max_size = 16
         self.is_checking = 0
         self.is_connecting = 0
+        if self.config['mode'] == 'direct':
+            return 0
         while 1:
             for x in range(self.pool_max_size-(len(self.connection_pool) + self.is_checking + self.is_connecting)):
                 try:
@@ -209,6 +217,8 @@ class yashmak_core():
     async def pool_health(self):
         self.slow_mode = True
         self.unhealthy = 0
+        if self.config['mode'] == 'direct':
+            return 0
         while 1:
             try:
                 for x in list(self.connection_pool):
@@ -452,23 +462,40 @@ class yashmak_core():
         context.load_verify_locations(self.config_path + self.config['cert'])
         return context
 
+    async def ipv6_test(self):
+        try:
+            server_writer = None
+            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='ipv6.lookup.test-ipv6.com', port=443), 5)
+            self.ipv6 = True
+            await self.clean_up(server_writer, None)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer, None)
+
     async def resolve(self,q_type,host):
         if self.is_ip(host):
-            return host
+            if not self.ipv6:
+                host = host.replace(b'::ffff:',b'')
+            return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
-            return self.dns_pool[host]
+            return self.dns_pool[host][q_type]
         else:
-            return await self.query(host, q_type)
-        await self.clean_up(client_writer, None)
+            return (await self.query(host))[q_type]
 
-    async def query(self,host,q_type):
+    async def query(self,host):
+        ipv4, ipv6 = await asyncio.gather(self.query_worker(host,'A'),self.query_worker(host,'AAAA'))
+        result = {'A':ipv4,'AAAA':ipv6}
+        self.dns_pool[host] = result
+        self.dns_ttl[host] = time.time()
+        return result
+
+    async def query_worker(self, host, q_type):
         try:
             if q_type == 'A':
                 mq_type = 1
             elif q_type == 'AAAA':
                 mq_type = 28
-            elif q_type == 'CNAME':
-                mq_type = 5
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -477,24 +504,24 @@ class yashmak_core():
             result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
             await self.clean_up(s, None)
             result = message.from_wire(result)
-            result = self.decode(str(result), q_type)
-            self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time()
-            return result
+            return self.decode(str(result), q_type)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(s, None)
 
     def decode(self,result,type):
+        IPs = []
         type = ' ' + type.upper() + ' '
         position = result.find(type)
         if position < 0:
-            return None
-        result = result[position + len(type):result.find('\n', position)]
+            return []
+        while position > 0:
+            IPs.append(result[position + len(type):result.find('\n', position)].encode('utf-8'))
+            position = result.find(type, position + len(type))
         if result[-1] == '.':
             result = result[:-1]
-        return result.encode('utf-8')
+        return IPs
 
     async def clear_cache(self):
         while 1:
@@ -573,7 +600,7 @@ class yashmak(yashmak_core):
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
+            example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
                        'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
