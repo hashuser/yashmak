@@ -7,6 +7,7 @@ main(){
   ./config
   make
   make install
+  echo "/usr/local/lib" > /etc/ld.so.conf.d/libc.conf
   echo "/usr/lib" >> /etc/ld.so.conf.d/libc.conf
   echo "ca_certificate=/etc/ssl/certs/ca-certificates.crt" > /etc/wgetrc
   ldconfig
