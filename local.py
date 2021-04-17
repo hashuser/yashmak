@@ -13,6 +13,11 @@ import time
 import multiprocessing
 import ctypes
 import winreg
+import random
+import win32api
+import gc
+
+gc.set_threshold(100000, 50, 50)
 
 class yashmak_core():
     def __init__(self):
@@ -45,6 +50,7 @@ class yashmak_core():
 
     async def handler(self, client_reader, client_writer):
         try:
+            #print(gc.get_count())
             server_writer = None
             tasks = None
             data = await asyncio.wait_for(client_reader.read(65535),20)
@@ -114,7 +120,9 @@ class yashmak_core():
                 IPs = await self.resolve('A',host)
             else:
                 IPs = [None]
-            for address in IPs:
+            IPs_length = len(IPs)
+            for x in range(IPs_length):
+                address = IPs[int(random.random() * 1000 % IPs_length)]
                 if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
                     if len(self.connection_pool) == 0:
                         server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
@@ -898,6 +906,7 @@ def make_link(location,target):
     os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
 
 if __name__ == '__main__':
+    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
     try:
         if ctypes.windll.shell32.IsUserAnAdmin():
             enable_loopback_UWPs()
@@ -967,9 +976,17 @@ if __name__ == '__main__':
         raise Exception
     else:
         if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已启动并成功连接', msecs=1000)
+            if os.path.exists('Config/new.json'):
+                tp.showMessage('Yashmak', 'Yashmak更新成功', msecs=1000)
+                os.remove('Config/new.json')
+            else:
+                tp.showMessage('Yashmak', '已启动并成功连接', msecs=1000)
         else:
-            tp.showMessage('Yashmak', 'Launched and successfully connected', msecs=1000)
+            if os.path.exists('Config/new.json'):
+                tp.showMessage('Yashmak', 'Yashmak successfully updated', msecs=1000)
+                os.remove('Config/new.json')
+            else:
+                tp.showMessage('Yashmak', 'Launched and successfully connected', msecs=1000)
         app.exec()
         tp.deleteLater()
         sys.exit()
