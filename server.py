@@ -12,6 +12,10 @@ import gzip
 import time
 import ntplib
 import uvloop
+import random
+import gc
+
+gc.set_threshold(100000, 50, 50)
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 class yashmak_worker():
@@ -64,7 +68,9 @@ class yashmak_worker():
                     host, port = self.process(data)
                     await self.redirect(client_writer, host, uuid)
                     IPs = await self.resolve('A',host)
-                    for address in IPs:
+                    IPs_length = len(IPs)
+                    for x in range(IPs_length):
+                        address = IPs[int(random.random() * 1000 % IPs_length)]
                         self.is_china_ip(address, host, uuid)
                         server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
                         break
