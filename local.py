@@ -251,6 +251,12 @@ class yashmak_core():
             S = time.time()
             await asyncio.sleep(0.5)
             E = time.time()
+            if E - S > 43200:
+                try:
+                    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
             if E - S > 1.5:
                 self.slow_mode = False
                 break
@@ -298,9 +304,11 @@ class yashmak_core():
                     for x in list(map(self.encode, customize)):
                         self.white_list.add(x.replace(b'*', b''))
                     data = list(set(data))
+                    self.backup(self.config['white_list'])
                     with open(self.config['white_list'], 'w') as file:
                         json.dump(data, file)
                 elif customize != b'':
+                    self.backup(self.config['white_list'])
                     with open(self.config['white_list'], 'wb') as file:
                         file.write(customize)
                 await self.clean_up(server_writer, file)
@@ -309,6 +317,12 @@ class yashmak_core():
                 error.__traceback__ = None
                 await self.clean_up(server_writer)
             await asyncio.sleep(60)
+
+    def backup(self,path):
+        os.makedirs(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup', exist_ok=True)
+        with open(path,'rb') as ofile:
+            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/chinalist.json', 'wb') as bkfile:
+                bkfile.write(ofile.read())
 
     def exception_handler(self, loop, context):
         pass
@@ -738,13 +752,20 @@ def kill():
         error.__traceback__ = None
 
 def run():
-    global process1
-    process1 = multiprocessing.Process(target=yashmak)
-    process1.daemon = True
-    process1.start()
-    time.sleep(1)
-    if not process1.is_alive():
-        raise Exception
+    repaired = False
+    while True:
+        global process1
+        process1 = multiprocessing.Process(target=yashmak)
+        process1.daemon = True
+        process1.start()
+        time.sleep(1)
+        if not process1.is_alive() and not repaired:
+            repair()
+            repaired = True
+        elif not process1.is_alive() and repaired:
+            raise Exception
+        else:
+            break
 
 def edit_config(key,value):
     path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
@@ -905,8 +926,17 @@ def make_link(location,target):
     working_dir = '''/w:"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '''"'''
     os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
 
+def repair():
+    with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/chinalist.json', 'rb') as bkfile:
+        with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/chinalist.json', 'wb') as ofile:
+            ofile.write(bkfile.read())
+
 if __name__ == '__main__':
-    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+    try:
+        win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+    except Exception as error:
+        traceback.clear_frames(error.__traceback__)
+        error.__traceback__ = None
     try:
         if ctypes.windll.shell32.IsUserAnAdmin():
             enable_loopback_UWPs()
