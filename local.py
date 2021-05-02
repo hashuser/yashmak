@@ -16,6 +16,7 @@ import winreg
 import random
 import win32api
 import gc
+import psutil
 
 gc.set_threshold(100000, 50, 50)
 
@@ -41,7 +42,9 @@ class yashmak_core():
             self.loop.create_task(self.pool())
             self.loop.create_task(self.pool_health())
             self.loop.create_task(self.update_white_list())
+            self.loop.create_task(self.update_yashmak())
             self.loop.create_task(self.clear_cache())
+            self.loop.create_task(self.check_parent())
             self.loop.create_task(self.ipv6_test())
             self.loop.run_forever()
         except Exception as error:
@@ -251,12 +254,6 @@ class yashmak_core():
             S = time.time()
             await asyncio.sleep(0.5)
             E = time.time()
-            if E - S > 43200:
-                try:
-                    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
-                except Exception as error:
-                    traceback.clear_frames(error.__traceback__)
-                    error.__traceback__ = None
             if E - S > 1.5:
                 self.slow_mode = False
                 break
@@ -275,6 +272,18 @@ class yashmak_core():
             self.is_checking -= 1
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
+
+    async def update_yashmak(self):
+        S = time.time()
+        while 1:
+            if time.time() - S > 43200:
+                try:
+                    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+                    S = time.time()
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+            await asyncio.sleep(300)
 
     async def update_white_list(self):
         while 1:
@@ -305,10 +314,12 @@ class yashmak_core():
                         self.white_list.add(x.replace(b'*', b''))
                     data = list(set(data))
                     self.backup(self.config['white_list'])
+                    await asyncio.sleep(1)
                     with open(self.config['white_list'], 'w') as file:
                         json.dump(data, file)
                 elif customize != b'':
                     self.backup(self.config['white_list'])
+                    await asyncio.sleep(1)
                     with open(self.config['white_list'], 'wb') as file:
                         file.write(customize)
                 await self.clean_up(server_writer, file)
@@ -562,6 +573,13 @@ class yashmak_core():
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
 
+    async def check_parent(self):
+        ppid = os.getppid()
+        while 1:
+            if ppid not in psutil.pids():
+                sys.exit(0)
+            await asyncio.sleep(10)
+
     async def TCP_ping(self):
         try:
             t_t = 0
@@ -603,6 +621,11 @@ class yashmak(yashmak_core):
         self.set_proxy()
         self.load_exception_list()
         self.write_pid()
+        try:
+            win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
         yashmak_core.__init__(self)
 
     def load_config(self):
@@ -751,6 +774,18 @@ def kill():
         traceback.clear_frames(error.__traceback__)
         error.__traceback__ = None
 
+def daemon(children,father):
+    while 1:
+        if father not in psutil.pids():
+            for child in children:
+                try:
+                    child.kill()
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+            break
+        time.sleep(10)
+
 def run():
     repaired = False
     while True:
@@ -763,7 +798,13 @@ def run():
             repair()
             repaired = True
         elif not process1.is_alive() and repaired:
-            raise Exception
+            path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
+            if os.path.exists(path):
+                with open(path, 'r') as file:
+                    pid = int(file.read())
+                if pid in psutil.pids():
+                    raise Exception('Yashmak has already lunched')
+            raise Exception('Unknown Error')
         else:
             break
 
@@ -933,16 +974,10 @@ def repair():
 
 if __name__ == '__main__':
     try:
-        win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
-    except Exception as error:
-        traceback.clear_frames(error.__traceback__)
-        error.__traceback__ = None
-    try:
         if ctypes.windll.shell32.IsUserAnAdmin():
             enable_loopback_UWPs()
             sys.exit(0)
-        process1 = 0
-        process2 = 0
+        run()
         UWP = False
         language = detect_language()[0]
         app = QtWidgets.QApplication(sys.argv)
@@ -993,13 +1028,15 @@ if __name__ == '__main__':
         tpmen.addAction(e)
         tpmen.addAction(f)
         tp.setContextMenu(tpmen)
-        run()
-    except Exception:
-        exit()
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '启动失败', msecs=1000)
+    except Exception as e:
+        if not 'Yashmak has already lunched' in e:
+            exit()
+            if language == 'zh-Hans-CN':
+                tp.showMessage('Yashmak', '未知错误启动失败', msecs=1000)
+            else:
+                tp.showMessage('Yashmak', 'Unknown Error Failed to launch', msecs=1000)
         else:
-            tp.showMessage('Yashmak', 'Failed to launch', msecs=1000)
+            kill()
         tp.hide()
         w.deleteLater()
         w.close()
