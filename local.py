@@ -36,6 +36,7 @@ class yashmak_core():
             self.dns_pool = dict()
             self.dns_ttl = dict()
             self.ipv6 = False
+            self.backup(self.config['white_list'], 'old.json')
             self.loop.set_exception_handler(self.exception_handler)
             self.loop.create_task(server)
             #self.loop.create_task(self.TCP_ping())
@@ -53,7 +54,6 @@ class yashmak_core():
 
     async def handler(self, client_reader, client_writer):
         try:
-            #print(gc.get_count())
             server_writer = None
             tasks = None
             data = await asyncio.wait_for(client_reader.read(65535),20)
@@ -121,6 +121,10 @@ class yashmak_core():
         try:
             if not type:
                 IPs = await self.resolve('A',host)
+                if IPs == None:
+                    client_writer.write(b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
+                    await client_writer.drain()
+                    raise Exception
             else:
                 IPs = [None]
             IPs_length = len(IPs)
@@ -313,12 +317,12 @@ class yashmak_core():
                     for x in list(map(self.encode, customize)):
                         self.white_list.add(x.replace(b'*', b''))
                     data = list(set(data))
-                    self.backup(self.config['white_list'])
+                    self.backup(self.config['white_list'],'chinalist.json')
                     await asyncio.sleep(1)
                     with open(self.config['white_list'], 'w') as file:
                         json.dump(data, file)
                 elif customize != b'':
-                    self.backup(self.config['white_list'])
+                    self.backup(self.config['white_list'],'chinalist.json')
                     await asyncio.sleep(1)
                     with open(self.config['white_list'], 'wb') as file:
                         file.write(customize)
@@ -329,10 +333,10 @@ class yashmak_core():
                 await self.clean_up(server_writer)
             await asyncio.sleep(60)
 
-    def backup(self,path):
+    def backup(self,path,filename):
         os.makedirs(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup', exist_ok=True)
         with open(path,'rb') as ofile:
-            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/chinalist.json', 'wb') as bkfile:
+            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'wb') as bkfile:
                 bkfile.write(ofile.read())
 
     def exception_handler(self, loop, context):
@@ -513,14 +517,20 @@ class yashmak_core():
             return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
             return self.dns_pool[host][q_type]
-        else:
-            return (await self.query(host))[q_type]
+        return (await self.query(host))[q_type]
 
     async def query(self,host):
-        ipv4, ipv6 = await asyncio.gather(self.query_worker(host,'A'),self.query_worker(host,'AAAA'))
+        ipv4 = None
+        ipv6 = None
+        for x in range(12):
+            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A'), self.query_worker(host, 'AAAA'))
+            if ipv4 != None and ipv6 != None:
+                break
+            await asyncio.sleep(0.5)
         result = {'A':ipv4,'AAAA':ipv6}
-        self.dns_pool[host] = result
-        self.dns_ttl[host] = time.time()
+        if ipv4 != None and ipv6 != None:
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
         return result
 
     async def query_worker(self, host, q_type):
@@ -531,16 +541,29 @@ class yashmak_core():
                 mq_type = 28
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            await self.loop.sock_connect(s, ('114.114.114.114', 53))
-            await self.loop.sock_sendall(s, query)
-            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
-            await self.clean_up(s, None)
-            result = message.from_wire(result)
+            done, pending = await asyncio.wait([asyncio.create_task(self.get_query_response(query,('114.114.114.114', 53))),
+                                                asyncio.create_task(self.get_query_response(query,('119.29.29.29', 53)))],
+                                                return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+            result = message.from_wire(done.pop().result())
             return self.decode(str(result), q_type)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+
+    async def get_query_response(self, query, address):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, address)
+            await self.loop.sock_sendall(s, query)
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024),4)
+            return result
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(s, None)
+        finally:
             await self.clean_up(s, None)
 
     def decode(self,result,type):
@@ -787,23 +810,26 @@ def daemon(children,father):
         time.sleep(10)
 
 def run():
-    repaired = False
+    repaired = 0
     while True:
         global process1
         process1 = multiprocessing.Process(target=yashmak)
         process1.daemon = True
         process1.start()
         time.sleep(1)
-        if not process1.is_alive() and not repaired:
-            repair()
-            repaired = True
-        elif not process1.is_alive() and repaired:
+        if not process1.is_alive() and repaired < 1:
             path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
             if os.path.exists(path):
                 with open(path, 'r') as file:
                     pid = int(file.read())
                 if pid in psutil.pids():
                     raise Exception('Yashmak has already lunched')
+            repair('chinalist.json')
+            repaired += 1
+        elif not process1.is_alive() and repaired == 1:
+            repair('old.json')
+            repaired += 1
+        elif not process1.is_alive() and repaired >= 2:
             raise Exception('Unknown Error')
         else:
             break
@@ -967,8 +993,8 @@ def make_link(location,target):
     working_dir = '''/w:"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '''"'''
     os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
 
-def repair():
-    with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/chinalist.json', 'rb') as bkfile:
+def repair(filename):
+    with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'rb') as bkfile:
         with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/chinalist.json', 'wb') as ofile:
             ofile.write(bkfile.read())
 

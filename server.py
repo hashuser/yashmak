@@ -19,7 +19,7 @@ gc.set_threshold(100000, 50, 50)
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 class yashmak_worker():
-    def __init__(self,config,host_list,geoip_list,exception_list_name,local_path,utc_difference,start_time):
+    def __init__(self,config,host_list,dns_pool,dns_ttl,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
         self.loop = asyncio.get_event_loop()
         if socket.has_dualstack_ipv6():
@@ -31,12 +31,12 @@ class yashmak_worker():
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_context())
         self.host_list = host_list
         self.geoip_list = geoip_list
+        self.dns_pool = dns_pool
+        self.dns_ttl = dns_ttl
         self.exception_list_name = exception_list_name
         self.local_path = local_path 
         self.utc_difference = utc_difference
         self.start_time = start_time
-        self.dns_pool = dict()
-        self.dns_ttl = dict()
         self.ipv6 = False
         self.log = []
         self.loop.set_exception_handler(self.exception_handler)
@@ -410,14 +410,20 @@ class yashmak_worker():
             return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
             return self.dns_pool[host][q_type]
-        else:
-            return (await self.query(host))[q_type]
+        return (await self.query(host))[q_type]
 
     async def query(self,host):
-        ipv4, ipv6 = await asyncio.gather(self.query_worker(host,'A'),self.query_worker(host,'AAAA'))
+        ipv4 = None
+        ipv6 = None
+        for x in range(12):
+            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A'), self.query_worker(host, 'AAAA'))
+            if ipv4 != None and ipv6 != None:
+                break
+            await asyncio.sleep(0.5)
         result = {'A':ipv4,'AAAA':ipv6}
-        self.dns_pool[host] = result
-        self.dns_ttl[host] = time.time()
+        if ipv4 != None and ipv6 != None:
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
         return result
 
     async def query_worker(self, host, q_type):
@@ -429,7 +435,7 @@ class yashmak_worker():
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            await self.loop.sock_connect(s, ('8.8.8.8', 53))
+            await self.loop.sock_connect(s, (self.config['dns'], 53))
             await self.loop.sock_sendall(s, query)
             result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
             await self.clean_up(s, None)
@@ -571,6 +577,8 @@ class yashmak_log():
 class yashmak():
     def __init__(self):
         self.host_list = dict()
+        self.dns_pool = dict()
+        self.dns_ttl = dict()
         self.geoip_list = []
         self.load_config()
         self.load_lists()
@@ -582,7 +590,7 @@ class yashmak():
         p.start()
         #start workers
         for x in range(os.cpu_count()):
-            p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
+            p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
 
     def get_time(self):
@@ -608,7 +616,7 @@ class yashmak():
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['port'] = int(self.config['port'])
         else:
-            example = {'geoip': '','blacklist': '','cert': '', 'key': '', 'uuid': [''], 'ip': '', 'port': ''}
+            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'dns': '', 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -637,6 +645,11 @@ class yashmak():
             data['tag'][key.replace('*', '').encode('utf-8')] = value
         data[None] = None
         self.host_list[b'blacklist'] = data
+        with open(self.config['hostlist'], 'r') as file:
+            data = json.load(file)
+        for x in data:
+            self.dns_pool[x.encode('utf-8')] = data[x]
+            self.dns_ttl[x.encode('utf-8')] = time.time() * 2
 
     def UUID_detect(self, UUIDs):
         for x in UUIDs:
