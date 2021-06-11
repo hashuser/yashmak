@@ -120,7 +120,7 @@ install_Yashmak(){
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
-  apt-get install python3.8 -y
+  apt-get install python3.9 -y
   apt-get install python3-pip -y
   pip3 install dnspython3 -y
   pip3 install uvloop -y
