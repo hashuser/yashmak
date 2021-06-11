@@ -11,7 +11,7 @@ create_service(){
   User=root
   Group=root
   WorkingDirectory=$(cd "$(dirname "$0")";pwd)
-  ExecStart=/usr/bin/python3.8 $(cd "$(dirname "$0")";pwd)/server.py
+  ExecStart=/usr/bin/python3.9 $(cd "$(dirname "$0")";pwd)/server.py
   LimitNOFILE=1048575
   Restart=always
   TasksMax=infinity
