@@ -122,9 +122,9 @@ install_Yashmak(){
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
   apt-get install python3.9 -y
   apt-get install python3-pip -y
-  pip3 install dnspython3 -y
-  pip3 install uvloop -y
-  pip3 install ntplib -y
+  python3.9 -m pip install dnspython3 -y
+  python3.9 -m pip install uvloop -y
+  python3.9 -m pip install ntplib -y
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
