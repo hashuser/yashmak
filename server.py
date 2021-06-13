@@ -10,6 +10,7 @@ import ipaddress
 import traceback
 import gzip
 import time
+import datetime
 import ntplib
 import uvloop
 import random
@@ -76,14 +77,14 @@ class yashmak_worker():
                         break
                     await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
                                          self.switch(server_reader, client_writer, server_writer))
-                elif data == -1:
-                    await self.updater(client_writer, uuid, False)
+                elif data == -4:
+                    await self.echo(client_writer, client_reader)
                 elif data == -2:
                     await self.TCP_ping(client_writer, client_reader)
                 elif data == -3:
-                    await self.updater(client_writer, uuid, True)
-                elif data == -4:
-                    await self.echo(client_writer, client_reader)
+                    await self.updater(client_writer, uuid)
+                else:
+                    raise Exception('unknown command')
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -221,15 +222,12 @@ class yashmak_worker():
             error.__traceback__ = None
             await self.clean_up(writer)
 
-    async def updater(self, writer, uuid, compress=False):
+    async def updater(self, writer, uuid):
         try:
             if len(uuid) != 36 or b'.' in uuid or b'/' in uuid or b'\\' in uuid:
                 raise Exception
-            if (uuid + b'_compressed') in self.exception_list_cache and (uuid + b'_normal') in self.exception_list_cache:
-                if compress:
-                    writer.write(self.exception_list_cache[uuid + b'_compressed'])
-                else:
-                    writer.write(self.exception_list_cache[uuid + b'_normal'])
+            if (uuid + b'_compressed') in self.exception_list_cache:
+                writer.write(self.exception_list_cache[uuid + b'_compressed'])
                 await writer.drain()
             else:
                 writer.write(b'\n')
@@ -249,7 +247,6 @@ class yashmak_worker():
                     if os.path.exists(path):
                         with open(path, 'rb') as file:
                             content = file.read()
-                            self.exception_list_cache[uuid + b'_normal'] = content
                             self.exception_list_cache[uuid + b'_compressed'] = gzip.compress(content, 2)
                 await asyncio.sleep(60)
         except Exception as error:
@@ -588,10 +585,27 @@ class yashmak():
         #start log server
         p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
         p.start()
-        #start workers
+        #start normal workers
         for x in range(os.cpu_count()):
             p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
+        #start spare workers
+        self.run_spares()
+
+    def run_spares(self):
+        config = self.config
+        while True:
+            config['ip'] = '::'
+            config['port'] = self.get_calculated_port()
+            ps = []
+            for x in range(os.cpu_count()):
+                p = multiprocessing.Process(target=yashmak_worker, args=(config, self.host_list, self.dns_pool, self.dns_ttl, self.geoip_list, self.exception_list_name,self.local_path, self.utc_difference, self.start_time))
+                p.start()
+                ps.append(p)
+            while config['port'] == self.get_calculated_port():
+                time.sleep(1)
+            for x in ps:
+                x.kill()
 
     def get_time(self):
         client = ntplib.NTPClient()
@@ -662,6 +676,13 @@ class yashmak():
 
     def encode(self, data):
         return data.encode('utf-8')
+
+    def get_today(self):
+        today = int(str(datetime.datetime.utcnow())[:10].replace('-', '')) ** 3
+        return int(str(today)[today % 8:8] + str(today)[0:today % 8])
+
+    def get_calculated_port(self):
+        return 1024 + self.get_today() % 8976
 
 
 if __name__ == '__main__':
