@@ -128,6 +128,7 @@ install_Yashmak(){
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
+  wget -O hostlist.json https://raw.githubusercontent.com/hashuser/yashmak/master/hostlist.json
 }
 
 main(){
