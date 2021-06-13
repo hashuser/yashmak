@@ -122,6 +122,7 @@ install_Yashmak(){
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
   apt-get install python3.9 -y
   apt-get install python3-pip -y
+  apt-get install python3-distutils -y
   python3.9 -m pip install dnspython3 -y
   python3.9 -m pip install uvloop -y
   python3.9 -m pip install ntplib -y
