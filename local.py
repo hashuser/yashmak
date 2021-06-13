@@ -10,6 +10,7 @@ import ipaddress
 import traceback
 import gzip
 import time
+import datetime
 import multiprocessing
 import ctypes
 import winreg
@@ -36,14 +37,16 @@ class yashmak_core():
             self.dns_pool = dict()
             self.dns_ttl = dict()
             self.ipv6 = False
+            self.is_updating = True
+            self.main_port_fail = 0
             self.backup(self.config['white_list'], 'old.json')
             self.loop.set_exception_handler(self.exception_handler)
             self.loop.create_task(server)
             #self.loop.create_task(self.TCP_ping())
             self.loop.create_task(self.pool())
             self.loop.create_task(self.pool_health())
-            self.loop.create_task(self.update_white_list())
-            self.loop.create_task(self.update_yashmak())
+            self.loop.create_task(self.white_list_updater())
+            self.loop.create_task(self.yashmak_updater())
             self.loop.create_task(self.clear_cache())
             self.loop.create_task(self.check_parent())
             self.loop.create_task(self.ipv6_test())
@@ -132,11 +135,8 @@ class yashmak_core():
                 address = IPs[int(random.random() * 1000 % IPs_length)]
                 if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
                     if len(self.connection_pool) == 0:
-                        server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                                     port=self.config['port'],
-                                                                                     ssl=self.context,
-                                                                                     server_hostname=self.config['host'],
-                                                                                     ssl_handshake_timeout=5)
+                        server_reader, server_writer = await self.connect_proxy_server()
+                        self.is_updating = False
                         server_writer.write(self.config['uuid'])
                         await server_writer.drain()
                     else:
@@ -215,11 +215,8 @@ class yashmak_core():
 
     async def make_connections(self):
         try:
-            server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                         port=self.config['port'],
-                                                                         ssl=self.context,
-                                                                         server_hostname=self.config['host'],
-                                                                         ssl_handshake_timeout=5)
+            server_reader, server_writer = await self.connect_proxy_server()
+            self.is_updating = False
             server_writer.write(self.config['uuid'])
             await server_writer.drain()
             self.connection_pool.append((server_reader, server_writer))
@@ -228,6 +225,29 @@ class yashmak_core():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             self.is_connecting -= 1
+
+    async def connect_proxy_server(self):
+        server_reader, server_writer = None, None
+        if self.main_port_fail <= 100:
+            ports = [self.config['port'], self.get_calculated_port()]
+        else:
+            ports = [self.get_calculated_port()]
+        for x in ports:
+            try:
+                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
+                                                                             port=x,
+                                                                             ssl=self.context,
+                                                                             server_hostname=self.config['host'],
+                                                                             ssl_handshake_timeout=5)
+                return server_reader, server_writer
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                if x == self.config['port']:
+                    self.main_port_fail += 1
+        if server_reader == None or server_writer == None:
+            self.update_yashmak()
+            raise Exception(error)
 
     async def pool_health(self):
         self.slow_mode = True
@@ -277,28 +297,29 @@ class yashmak_core():
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
-    async def update_yashmak(self):
+    async def yashmak_updater(self):
         S = time.time()
         while 1:
-            if time.time() - S > 43200:
-                try:
-                    win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
-                    S = time.time()
-                except Exception as error:
-                    traceback.clear_frames(error.__traceback__)
-                    error.__traceback__ = None
+            if time.time() - S > 7200:
+                self.update_yashmak()
+                S = time.time()
             await asyncio.sleep(300)
 
-    async def update_white_list(self):
+    def update_yashmak(self):
+        try:
+            if not os.path.exists(self.config_path + 'download.json') and not self.is_updating:
+                win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+                self.is_updating = True
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    async def white_list_updater(self):
         while 1:
             try:
                 server_writer = None
                 file = None
-                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                             port=self.config['port'],
-                                                                             ssl=self.context,
-                                                                             server_hostname=self.config['host'],
-                                                                             ssl_handshake_timeout=5)
+                server_reader, server_writer = await self.connect_proxy_server()
                 server_writer.write(self.config['uuid'])
                 await server_writer.drain()
                 server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
@@ -541,9 +562,10 @@ class yashmak_core():
                 mq_type = 28
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
-            done, pending = await asyncio.wait([asyncio.create_task(self.get_query_response(query,('114.114.114.114', 53))),
-                                                asyncio.create_task(self.get_query_response(query,('119.29.29.29', 53)))],
-                                                return_when=asyncio.FIRST_COMPLETED)
+            tasks = []
+            for x in self.config['dns']:
+                tasks.append(asyncio.create_task(self.get_query_response(query,(x, 53))))
+            done, pending = await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
             result = message.from_wire(done.pop().result())
@@ -608,11 +630,7 @@ class yashmak_core():
             t_t = 0
             t_c = 0
             while 1:
-                server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
-                                                                             port=self.config['port'],
-                                                                             ssl=self.context,
-                                                                             server_hostname=self.config['host'],
-                                                                             ssl_handshake_timeout=5)
+                server_reader, server_writer = await self.connect_proxy_server()
                 server_writer.write(self.config['uuid'])
                 await server_writer.drain()
                 server_writer.write(int.to_bytes(-2, 2, 'big', signed=True))
@@ -632,6 +650,13 @@ class yashmak_core():
             await self.clean_up(server_writer)
         finally:
             await self.clean_up(server_writer)
+
+    def get_today(self):
+        today = int(str(datetime.datetime.utcnow())[:10].replace('-', '')) ** 3
+        return int(str(today)[today % 8:8] + str(today)[0:today % 8])
+
+    def get_calculated_port(self):
+        return 1024 + self.get_today() % 8976
 
 
 class yashmak(yashmak_core):
@@ -664,12 +689,13 @@ class yashmak(yashmak_core):
             self.config[self.config['active']]['black_list'] = self.config_path + self.config['black_list']
             self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
             self.config[self.config['active']]['geoip_list'] = self.config_path + self.config['geoip_list']
+            self.config[self.config['active']]['dns'] = self.config['dns']
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
-                       'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
+                       'dns': [''], 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -710,7 +736,7 @@ class yashmak(yashmak_core):
 
             set_key('ProxyEnable', 1)
             set_key('ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
-            set_key('ProxyServer', '127.0.0.1:'+str(self.config['listen']))
+            set_key('ProxyServer', 'http://127.0.0.1:'+str(self.config['listen']))
             internet_set_option = ctypes.windll.wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
@@ -792,7 +818,8 @@ def detect_language():
 def kill():
     global process1
     try:
-        process1.kill()
+        while process1.is_alive():
+            process1.kill()
     except Exception as error:
         traceback.clear_frames(error.__traceback__)
         error.__traceback__ = None
@@ -812,18 +839,18 @@ def daemon(children,father):
 def run():
     repaired = 0
     while True:
+        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                pid = int(file.read())
+            if pid in psutil.pids():
+                raise Exception('Yashmak has already lunched')
         global process1
         process1 = multiprocessing.Process(target=yashmak)
         process1.daemon = True
         process1.start()
         time.sleep(1)
         if not process1.is_alive() and repaired < 1:
-            path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
-            if os.path.exists(path):
-                with open(path, 'r') as file:
-                    pid = int(file.read())
-                if pid in psutil.pids():
-                    raise Exception('Yashmak has already lunched')
             repair('chinalist.json')
             repaired += 1
         elif not process1.is_alive() and repaired == 1:
