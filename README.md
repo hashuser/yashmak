@@ -50,7 +50,6 @@ HMAK是Yashmak专有协议，轻量快速，用于对代理服务器发送指令
 * 指令长度:
   * L>0: L字节的指令
   * L=0: 心跳包
-  * L=-1: ChinaList更新请求(不压缩)
   * L=-2: TCP_Ping请求
   * L=-3: ChinaList更新请求(Gzip压缩)
 * 连接复用:
