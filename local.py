@@ -1,3 +1,5 @@
+import threading
+
 from PyQt5 import QtWidgets, QtGui, QtCore
 from dns import message
 import asyncio
@@ -762,351 +764,312 @@ class yashmak(yashmak_core):
     def encode(self, data):
         return data.encode('utf-8')
 
-def exit():
-    platform = sys.platform
-    if platform == 'win32':
-        os.popen("CheckNetIsolation.exe loopbackexempt -c")
-        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
+class windows(QtWidgets.QMainWindow):
+    def __init__(self):
+        super(windows, self).__init__()
+        self.init_windows()
 
-        def set_key(name, value):
-            _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
-            winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+    def activate(self,reason):
+        if reason == 1:
+            position = win32api.GetCursorPos()
+            self.tpmen.popup(QtCore.QPoint(position[0],position[1]))
 
-        set_key('ProxyEnable', 0)
-        internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
-        internet_set_option(0, 37, 0, 0)
-        internet_set_option(0, 39, 0, 0)
-    elif platform == 'darwin':
-        os.popen('''networksetup -setwebproxystate "Wi-Fi" off''')
-        os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" off''')
-        os.popen('''networksetup -setwebproxystate "Ethernet" off''')
-        os.popen('''networksetup -setsecurewebproxystate "Ethernet" off''')
-    kill()
+    def close_menu(self):
+        self.tpmen.close()
+        self.timer.stop()
 
-def enable_loopback_UWPs():
-    os.popen("CheckNetIsolation.exe loopbackexempt -c")
-    INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings',0, winreg.KEY_ALL_ACCESS)
-    for x in range(winreg.QueryInfoKey(INTERNET_SETTINGS)[0]):
+    def init_windows(self):
         try:
-            os.popen("CheckNetIsolation.exe loopbackexempt -a -p=" + winreg.EnumKey(INTERNET_SETTINGS, x))
+            if ctypes.windll.shell32.IsUserAnAdmin():
+                self.enable_loopback_UWPs()
+                sys.exit(0)
+            self.run()
+            self.language = self.detect_language()[0]
+            self.actions = {
+                'Auto': QtWidgets.QAction(self.text_translator(' 自动模式 '), triggered=lambda: self.react('Auto'),icon=QtGui.QIcon('correct.svg')),
+                'Global': QtWidgets.QAction(self.text_translator(' 全局模式 '), triggered=lambda: self.react('Global'),icon=QtGui.QIcon('correct.svg')),
+                'Direct': QtWidgets.QAction(self.text_translator(' 直连模式 '), triggered=lambda: self.react('Direct'),icon=QtGui.QIcon('correct.svg')),
+                'AutoStartup': QtWidgets.QAction(self.text_translator(' 开机自启 '), triggered=lambda: self.react('AutoStartup')),
+                'AllowUWP': QtWidgets.QAction(self.text_translator(' 允许UWP '), triggered=lambda: self.react('AllowUWP'),icon=QtGui.QIcon('hook.svg')),
+                'Close': QtWidgets.QAction(self.text_translator(' 退出 '), triggered=lambda: self.react('Close'))}
+            self.w = QtWidgets.QWidget()
+            self.tp = QtWidgets.QSystemTrayIcon()
+            self.tp.activated.connect(self.activate)
+            if self.is_light_Theme():
+                self.tp.setIcon(QtGui.QIcon('light_mode_icon.svg'))
+            else:
+                self.tp.setIcon(QtGui.QIcon('dark_mode_icon.svg'))
+            self.tpmen = QtWidgets.QMenu()
+            if self.language == 'zh-Hans-CN':
+                self.tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
+                                       QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
+                                       QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                                       QMenu::icon {padding:8px 6px 8px 6px;}''')
+            else:
+                self.tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
+                                       QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
+                                       QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                                       QMenu::icon {padding:8px 6px 8px 6px;}''')
+            self.tpmen.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
+            self.tpmen.setWindowFlag(QtCore.Qt.FramelessWindowHint)
+            self.tpmen.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint)
+            self.init()
+            self.tp.show()
         except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-
-def is_light_Theme():
-    try:
-        os.popen("CheckNetIsolation.exe loopbackexempt -c")
-        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize', 0,winreg.KEY_ALL_ACCESS)
-        value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'SystemUsesLightTheme')
-        return value
-    except Exception as error:
-        traceback.clear_frames(error.__traceback__)
-        error.__traceback__ = None
-        return True
-
-def detect_language():
-    try:
-        os.popen("CheckNetIsolation.exe loopbackexempt -c")
-        INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Control Panel\International\User Profile', 0,winreg.KEY_ALL_ACCESS)
-        value, _ = winreg.QueryValueEx(INTERNET_SETTINGS, 'Languages')
-        return value
-    except Exception as error:
-        traceback.clear_frames(error.__traceback__)
-        error.__traceback__ = None
-        return ['']
-
-def kill():
-    global process1
-    try:
-        while process1.is_alive():
-            process1.kill()
-    except Exception as error:
-        traceback.clear_frames(error.__traceback__)
-        error.__traceback__ = None
-
-def daemon(children,father):
-    while 1:
-        if father not in psutil.pids():
-            for child in children:
-                try:
-                    child.kill()
-                except Exception as error:
-                    traceback.clear_frames(error.__traceback__)
-                    error.__traceback__ = None
-            break
-        time.sleep(10)
-
-def run():
-    repaired = 0
-    while True:
-        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
-        if os.path.exists(path):
-            with open(path, 'r') as file:
-                pid = int(file.read())
-            if pid in psutil.pids():
-                raise Exception('Yashmak has already lunched')
-        global process1
-        process1 = multiprocessing.Process(target=yashmak)
-        process1.daemon = True
-        process1.start()
-        time.sleep(1)
-        if not process1.is_alive() and repaired < 1:
-            repair('chinalist.json')
-            repaired += 1
-        elif not process1.is_alive() and repaired == 1:
-            repair('old.json')
-            repaired += 1
-        elif not process1.is_alive() and repaired >= 2:
-            raise Exception('Unknown Error')
+            if not 'Yashmak has already lunched' in error:
+                self.exit()
+                self.pop_message('未知错误启动失败')
+            else:
+                self.kill()
+            self.tp.hide()
+            self.w.deleteLater()
+            self.w.close()
+            raise Exception
         else:
-            break
+            if os.path.exists('Config/new.json'):
+                self.pop_message('Yashmak更新成功')
+                os.remove('Config/new.json')
+            else:
+                self.pop_message('已启动并成功连接')
+            self.tpmen.popup(QtCore.QPoint(0, 0))
+            self.timer = QtCore.QTimer()
+            self.timer.timeout.connect(self.close_menu)
+            self.timer.start(10)
 
-def edit_config(key,value):
-    path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
-    if os.path.exists(path):
-        with open(path, 'r') as file:
-            content = file.read()
-        content = translate(content)
-        config = json.loads(content)
-    config[key] = value
-    with open(path, 'w') as file:
-        json.dump(config, file, indent=4)
+    def react(self,message):
+        if message in ['Auto','Global','Direct']:
+            self.change_mode(message)
+        elif message == 'Close':
+            self.exit()
+            self.pop_message('已退出并断开连接')
+            self.tp.hide()
+            self.w.hide()
+            time.sleep(1)
+            self.w.close()
+        elif message == 'AutoStartup':
+            self.change_startup_policy()
+        elif message == 'AllowUWP':
+            ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
+            self.pop_message('已允许UWP应用连接代理')
+        self.tpmen.update()
 
-def translate(content):
-    return content.replace('\\', '/')
-
-def react(message):
-    global language
-    if message == 'Auto':
-        kill()
-        edit_config('mode','auto')
-        run()
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已设置为自动模式', msecs=1000)
-        else:
-            tp.showMessage('Yashmak', 'Has set to Auto Mode', msecs=1000)
-        a.setIconVisibleInMenu(True)
-        b.setIconVisibleInMenu(False)
-        c.setIconVisibleInMenu(False)
-    elif message == 'Global':
-        kill()
-        edit_config('mode','global')
-        run()
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已设置为全局模式', msecs=1000)
-        else:
-            tp.showMessage('Yashmak', 'Has set to Global Mode', msecs=1000)
-        a.setIconVisibleInMenu(False)
-        b.setIconVisibleInMenu(True)
-        c.setIconVisibleInMenu(False)
-    elif message == 'Direct':
-        kill()
-        edit_config('mode','direct')
-        run()
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已设置为直连模式', msecs=1000)
-        else:
-            tp.showMessage('Yashmak', 'Has set to Direct Mode', msecs=1000)
-        a.setIconVisibleInMenu(False)
-        b.setIconVisibleInMenu(False)
-        c.setIconVisibleInMenu(True)
-    elif message == 'Close':
-        exit()
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已退出并断开连接', msecs=1000)
-        else:
-            tp.showMessage('Yashmak', 'Exited and disconnected', msecs=1000)
-        tp.hide()
-        w.hide()
-        time.sleep(1)
-        w.close()
-    elif message == 'AutoStartup':
+    def change_startup_policy(self):
+        reverse = {'auto': 'manual', 'manual': 'auto'}
         path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
         if os.path.exists(path):
             with open(path, 'r') as file:
                 content = file.read()
-            content = translate(content)
+            content = self.translate(content)
             config = json.loads(content)
+        self.edit_config('startup', reverse[config['startup'].lower()])
         if config['startup'].lower() == 'auto':
-            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Recover.exe"
-            location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
+            self.auto_startup(False)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
+            self.pop_message('已取消开机自启')
+        elif config['startup'].lower() == 'manual':
+            self.auto_startup(True)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
+            self.pop_message('已设置开机自启')
+
+    def init(self):
+        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                content = file.read()
+            content = self.translate(content)
+            config = json.loads(content)
+        if config['mode'].lower() == 'auto':
+            self.option_switcher(['Auto', 'Global', 'Direct'], 'Auto')
+        elif config['mode'].lower() == 'global':
+            self.option_switcher(['Auto', 'Global', 'Direct'], 'Global')
+        elif config['mode'].lower() == 'direct':
+            self.option_switcher(['Auto', 'Global', 'Direct'], 'Direct')
+        if config['startup'].lower() == 'auto':
+            self.auto_startup(True)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
+        elif config['startup'].lower() == 'manual':
+            self.auto_startup(False)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
+        self.init_menu()
+
+    def exit(self):
+        platform = sys.platform
+        if platform == 'win32':
+            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
+
+            def set_key(name, value):
+                _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
+                winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+
+            set_key('ProxyEnable', 0)
+            internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
+            internet_set_option(0, 37, 0, 0)
+            internet_set_option(0, 39, 0, 0)
+        elif platform == 'darwin':
+            os.popen('''networksetup -setwebproxystate "Wi-Fi" off''')
+            os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" off''')
+            os.popen('''networksetup -setwebproxystate "Ethernet" off''')
+            os.popen('''networksetup -setsecurewebproxystate "Ethernet" off''')
+        self.kill()
+
+    def auto_startup(self, enable):
+        location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
+        try:
+            os.remove(location)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        if enable:
+            self.make_link(location,os.path.abspath(os.path.dirname(sys.argv[0])) + "\Verify.exe")
+        else:
+            self.make_link(location,os.path.abspath(os.path.dirname(sys.argv[0])) + "\Recover.exe")
+
+    def enable_loopback_UWPs(self):
+        os.popen("CheckNetIsolation.exe loopbackexempt -c")
+        MAPPINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppContainer\Mappings',0, winreg.KEY_ALL_ACCESS)
+        for x in range(winreg.QueryInfoKey(MAPPINGS)[0]):
             try:
-                os.remove(location)
+                os.popen("CheckNetIsolation.exe loopbackexempt -a -p=" + winreg.EnumKey(MAPPINGS, x))
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-            make_link(location, target)
-            edit_config('startup','manual')
-            actions[3].setIcon(QtGui.QIcon('hook.svg'))
-            if language == 'zh-Hans-CN':
-                tp.showMessage('Yashmak', '已取消开机自启', msecs=1000)
+
+    def is_light_Theme(self):
+        try:
+            PERSONALIZE = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'SOFTWARE\Microsoft\Windows\CurrentVersion\Themes\Personalize', 0,winreg.KEY_ALL_ACCESS)
+            value, _ = winreg.QueryValueEx(PERSONALIZE, 'SystemUsesLightTheme')
+            return value
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            return True
+
+    def detect_language(self):
+        try:
+            USER_PROFILE = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Control Panel\International\User Profile', 0,winreg.KEY_ALL_ACCESS)
+            value, _ = winreg.QueryValueEx(USER_PROFILE, 'Languages')
+            return value
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            return ['']
+
+    def kill(self):
+        global process1
+        try:
+            while process1.is_alive():
+                process1.kill()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def daemon(self,children, father):
+        while 1:
+            if father not in psutil.pids():
+                for child in children:
+                    try:
+                        child.kill()
+                    except Exception as error:
+                        traceback.clear_frames(error.__traceback__)
+                        error.__traceback__ = None
+                break
+            time.sleep(10)
+
+    def run(self):
+        repaired = 0
+        while True:
+            path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
+            if os.path.exists(path):
+                with open(path, 'r') as file:
+                    pid = int(file.read())
+                if pid in psutil.pids() and psutil.Process(pid).name().lower() == 'yashmak.exe':
+                    raise Exception('Yashmak has already lunched')
+            global process1
+            process1 = multiprocessing.Process(target=yashmak)
+            process1.daemon = True
+            process1.start()
+            time.sleep(1)
+            if not process1.is_alive() and repaired < 1:
+                self.repair('chinalist.json')
+                repaired += 1
+            elif not process1.is_alive() and repaired == 1:
+                self.repair('old.json')
+                repaired += 1
+            elif not process1.is_alive() and repaired >= 2:
+                raise Exception('Unknown Error')
             else:
-                tp.showMessage('Yashmak', 'Auto startup has been disabled', msecs=1000)
-        else:
-            target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Verify.exe"
-            location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
-            try:
-                os.remove(location)
-            except Exception as error:
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-            make_link(location, target)
-            edit_config('startup','auto')
-            actions[3].setIcon(QtGui.QIcon('correct.svg'))
-            if language == 'zh-Hans-CN':
-                tp.showMessage('Yashmak', '已设置开机自启', msecs=1000)
+                break
+
+    def edit_config(self,key, value):
+        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                content = file.read()
+            content = self.translate(content)
+            config = json.loads(content)
+        config[key] = value
+        with open(path, 'w') as file:
+            json.dump(config, file, indent=4)
+
+    def translate(self,content):
+        return content.replace('\\', '/')
+
+    def make_link(self,location, target):
+        shortcut = '''"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '/Shortcut.exe" /f:'
+        working_dir = '''/w:"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '''"'''
+        os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
+
+    def repair(self,filename):
+        with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'rb') as bkfile:
+            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/chinalist.json', 'wb') as ofile:
+                ofile.write(bkfile.read())
+
+    def option_switcher(self,items,target):
+        for x in items:
+            if x == target:
+                self.actions[x].setIconVisibleInMenu(True)
             else:
-                tp.showMessage('Yashmak', 'Auto startup has been enabled', msecs=1000)
-    elif message == 'AllowUWP':
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
-        if language == 'zh-Hans-CN':
-            tp.showMessage('Yashmak', '已允许UWP应用连接代理', msecs=1000)
+                self.actions[x].setIconVisibleInMenu(False)
+
+    def init_menu(self):
+        item = ['Auto','Global','Direct','Separator','AutoStartup','AllowUWP','Close']
+        for x in item:
+            if x == 'Separator':
+                self.tpmen.addSeparator()
+            elif x in self.actions:
+                self.tpmen.addAction(self.actions[x])
+
+    def change_mode(self,mode):
+        mes = {'Auto':'已设置为自动模式','Global':'已设置为全局模式','Direct':'已设置为直连模式'}
+        self.kill()
+        self.edit_config('mode', mode.lower())
+        self.run()
+        self.pop_message(mes[mode])
+        self.option_switcher(['Auto', 'Global', 'Direct'], mode)
+
+    def text_translator(self,message):
+        translations = {'已启动并成功连接': 'Launched and successfully connected',
+                        'Yashmak更新成功': 'Yashmak successfully updated',
+                        '未知错误启动失败': 'Unknown Error Failed to launch',
+                        '已允许UWP应用连接代理': 'UWP apps have been allowed to connect to the proxy',
+                        '已设置开机自启': 'Auto startup has been enabled', '已取消开机自启': 'Auto startup has been disabled',
+                        '已退出并断开连接': 'Exited and disconnected', '已设置为直连模式': 'Has set to Direct Mode',
+                        '已设置为全局模式': 'Has set to Global Mode', '已设置为自动模式': 'Has set to Auto Mode',
+                        ' 自动模式 ': ' Auto Mode', ' 全局模式 ':' Global Mode', ' 直连模式 ':' Direct Mode',
+                        ' 开机自启 ': ' Auto Startup', ' 允许UWP ': ' Allow UWP', ' 退出 ': ' Exit'}
+        if self.language == 'zh-Hans-CN':
+            return message
+        elif message in translations:
+            return translations[message]
         else:
-            tp.showMessage('Yashmak', 'UWP apps have been allowed to connect to the proxy', msecs=1000)
-    tpmen.clear()
-    tpmen.addAction(a)
-    tpmen.addAction(b)
-    tpmen.addAction(c)
-    tpmen.addSeparator()
-    tpmen.addAction(d)
-    tpmen.addAction(e)
-    tpmen.addAction(f)
-    tp.setContextMenu(tpmen)
+            return 'ERROR'
 
+    def pop_message(self,message):
+        self.tp.showMessage('Yashmak', self.text_translator(message), msecs=1000)
 
-def init():
-    a = actions[0]
-    b = actions[1]
-    c = actions[2]
-    d = actions[3]
-    e = actions[4]
-    f = actions[5]
-    path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
-    if os.path.exists(path):
-        with open(path, 'r') as file:
-            content = file.read()
-        content = translate(content)
-        config = json.loads(content)
-    if config['mode'].lower() == 'auto':
-        a.setIconVisibleInMenu(True)
-        b.setIconVisibleInMenu(False)
-        c.setIconVisibleInMenu(False)
-    elif config['mode'].lower() == 'global':
-        a.setIconVisibleInMenu(False)
-        b.setIconVisibleInMenu(True)
-        c.setIconVisibleInMenu(False)
-    elif config['mode'].lower() == 'direct':
-        a.setIconVisibleInMenu(False)
-        b.setIconVisibleInMenu(False)
-        c.setIconVisibleInMenu(True)
-    if config['startup'].lower() == 'auto':
-        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Verify.exe"
-        d.setIcon(QtGui.QIcon('correct.svg'))
-    elif config['startup'].lower() == 'manual':
-        target = os.path.abspath(os.path.dirname(sys.argv[0])) + "/Recover.exe"
-        d.setIcon(QtGui.QIcon('hook.svg'))
-    location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
-    try:
-        os.remove(location)
-    except Exception as error:
-        traceback.clear_frames(error.__traceback__)
-        error.__traceback__ = None
-    make_link(location, target)
-    e.setIcon(QtGui.QIcon('hook.svg'))
-    return a, b, c, d, e, f
-
-def make_link(location,target):
-    shortcut = '''"''' + os.path.abspath(os.path.dirname(sys.argv[0]))+'/Shortcut.exe" /f:'
-    working_dir = '''/w:"''' + os.path.abspath(os.path.dirname(sys.argv[0])) + '''"'''
-    os.popen(shortcut + '''"''' + location + '''" /a:c /t:"''' + target + '''" ''' + working_dir)
-
-def repair(filename):
-    with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'rb') as bkfile:
-        with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/chinalist.json', 'wb') as ofile:
-            ofile.write(bkfile.read())
 
 if __name__ == '__main__':
-    try:
-        if ctypes.windll.shell32.IsUserAnAdmin():
-            enable_loopback_UWPs()
-            sys.exit(0)
-        run()
-        UWP = False
-        language = detect_language()[0]
-        app = QtWidgets.QApplication(sys.argv)
-        app.setStyle('windowsvista')
-        if language == 'zh-Hans-CN':
-            actions = [
-                QtWidgets.QAction(' 自动模式 ', triggered=lambda: react('Auto'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' 全局模式 ', triggered=lambda: react('Global'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' 直连模式 ', triggered=lambda: react('Direct'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' 开机自启 ', triggered=lambda: react('AutoStartup')),
-                QtWidgets.QAction(' 允许UWP ', triggered=lambda: react('AllowUWP')),
-                QtWidgets.QAction(' 退出 ', triggered=lambda: react('Close'))]
-        else:
-            actions = [
-                QtWidgets.QAction(' Auto Mode', triggered=lambda: react('Auto'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' Global Mode', triggered=lambda: react('Global'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' Direct Mode', triggered=lambda: react('Direct'), icon=QtGui.QIcon('correct.svg')),
-                QtWidgets.QAction(' Auto Startup', triggered=lambda: react('AutoStartup')),
-                QtWidgets.QAction(' Allow UWP', triggered=lambda: react('AllowUWP')),
-                QtWidgets.QAction(' Exit', triggered=lambda: react('Close'))]
-        w = QtWidgets.QWidget()
-        tp = QtWidgets.QSystemTrayIcon(w)
-        if is_light_Theme():
-            tp.setIcon(QtGui.QIcon('light_mode_icon.svg'))
-        else:
-            tp.setIcon(QtGui.QIcon('dark_mode_icon.svg'))
-        tpmen = QtWidgets.QMenu()
-        if language == 'zh-Hans-CN':
-            tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
-                                   QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
-                                   QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
-                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
-        else:
-            tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
-                                   QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
-                                   QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
-                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
-        tpmen.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
-        tpmen.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-        tpmen.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint)
-        tp.show()
-        a, b, c, d, e, f = init()
-        tpmen.addAction(a)
-        tpmen.addAction(b)
-        tpmen.addAction(c)
-        tpmen.addSeparator()
-        tpmen.addAction(d)
-        tpmen.addAction(e)
-        tpmen.addAction(f)
-        tp.setContextMenu(tpmen)
-    except Exception as e:
-        if not 'Yashmak has already lunched' in e:
-            exit()
-            if language == 'zh-Hans-CN':
-                tp.showMessage('Yashmak', '未知错误启动失败', msecs=1000)
-            else:
-                tp.showMessage('Yashmak', 'Unknown Error Failed to launch', msecs=1000)
-        else:
-            kill()
-        tp.hide()
-        w.deleteLater()
-        w.close()
-        raise Exception
-    else:
-        if language == 'zh-Hans-CN':
-            if os.path.exists('Config/new.json'):
-                tp.showMessage('Yashmak', 'Yashmak更新成功', msecs=1000)
-                os.remove('Config/new.json')
-            else:
-                tp.showMessage('Yashmak', '已启动并成功连接', msecs=1000)
-        else:
-            if os.path.exists('Config/new.json'):
-                tp.showMessage('Yashmak', 'Yashmak successfully updated', msecs=1000)
-                os.remove('Config/new.json')
-            else:
-                tp.showMessage('Yashmak', 'Launched and successfully connected', msecs=1000)
-        app.exec()
-        tp.deleteLater()
-        sys.exit()
+    app = QtWidgets.QApplication(sys.argv)
+    app.setStyle('windowsvista')
+    window = windows()
+    sys.exit(app.exec_())
