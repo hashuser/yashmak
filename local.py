@@ -1,5 +1,3 @@
-import threading
-
 from PyQt5 import QtWidgets, QtGui, QtCore
 from dns import message
 import asyncio
