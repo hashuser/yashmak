@@ -243,7 +243,7 @@ class yashmak_core():
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                if x == self.config['port']:
+                if x == self.config['port'] and (await self.has_internet()):
                     self.main_port_fail += 1
         if server_reader == None or server_writer == None:
             self.update_yashmak()
@@ -296,6 +296,31 @@ class yashmak_core():
             self.is_checking -= 1
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
+
+    async def network_detector_worker(self,address):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, address)
+            await self.clean_up(s, None)
+            return 1
+        except Exception:
+            await self.clean_up(s, None)
+            return 0
+
+    async def has_internet(self):
+        DNS_IPs = ['114.114.114.114', '223.5.5.5', '119.29.29.29', '180.76.76.76', '1.2.4.8', '8.8.8.8', '1.1.1.1']
+        tasks = []
+        status = False
+        for x in DNS_IPs:
+            tasks.append(asyncio.create_task(self.network_detector_worker((x, 53))))
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for x in done:
+            status += x.result()
+        for x in pending:
+            x.cancel()
+        if status:
+            return True
+        return False
 
     async def yashmak_updater(self):
         S = time.time()
@@ -770,7 +795,7 @@ class windows(QtWidgets.QMainWindow):
     def activate(self,reason):
         if reason == 1:
             position = win32api.GetCursorPos()
-            self.tpmen.popup(QtCore.QPoint(position[0],position[1]))
+            self.tpmen.popup(QtCore.QPoint(position[0], position[1]))
 
     def close_menu(self):
         self.tpmen.close()
@@ -799,14 +824,14 @@ class windows(QtWidgets.QMainWindow):
                 self.tp.setIcon(QtGui.QIcon('dark_mode_icon.svg'))
             self.tpmen = QtWidgets.QMenu()
             if self.language == 'zh-Hans-CN':
-                self.tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
-                                       QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
-                                       QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
+                                       QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
+                                       QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
                                        QMenu::icon {padding:8px 6px 8px 6px;}''')
             else:
-                self.tpmen.setStyleSheet('''QMenu {background-color:#f5f5f5; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #e0e0e0; border-radius:4px;}
-                                       QMenu::item:selected {background-color:#e0e0e0; color:#333333; padding:8px 10px 8px 10px;}
-                                       QMenu::item {background-color:#f5f5f5;padding:8px 10px 8px 10px;}
+                self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
+                                       QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
+                                       QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
                                        QMenu::icon {padding:8px 6px 8px 6px;}''')
             self.tpmen.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
             self.tpmen.setWindowFlag(QtCore.Qt.FramelessWindowHint)
@@ -977,10 +1002,14 @@ class windows(QtWidgets.QMainWindow):
         repaired = 0
         while True:
             path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
-            if os.path.exists(path):
-                with open(path, 'r') as file:
-                    pid = int(file.read())
-                if pid in psutil.pids() and psutil.Process(pid).name().lower() == 'yashmak.exe':
+            try:
+                if os.path.exists(path):
+                    with open(path, 'r') as file:
+                        pid = int(file.read())
+                    if pid in psutil.pids() and psutil.Process(pid).name().lower() == 'yashmak.exe':
+                        raise Exception('Yashmak has already lunched')
+            except Exception as error:
+                if 'Yashmak has already lunched' in error:
                     raise Exception('Yashmak has already lunched')
             global process1
             process1 = multiprocessing.Process(target=yashmak)
