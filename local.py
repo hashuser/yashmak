@@ -60,6 +60,7 @@ class yashmak_core():
             server_writer = None
             tasks = None
             data = await asyncio.wait_for(client_reader.read(65535),20)
+            print(data)
             if data == b'':
                 raise Exception
             data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
@@ -747,21 +748,24 @@ class yashmak(yashmak_core):
         platform = sys.platform
         if platform == 'win32':
             INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
+            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Environment',0, winreg.KEY_ALL_ACCESS)
 
-            def set_key(name, value):
+            def set_key(root, name, value):
                 try:
-                    _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
-                    winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+                    _, reg_type = winreg.QueryValueEx(root, name)
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
                 except Exception:
                     if type(value) == type("a"):
                         reg_type = 1
                     elif type(value) == type(1):
                         reg_type = 4
-                    winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
 
-            set_key('ProxyEnable', 1)
-            set_key('ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
-            set_key('ProxyServer', 'http://127.0.0.1:'+str(self.config['listen']))
+            set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
+            set_key(INTERNET_SETTINGS, 'ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
+            set_key(INTERNET_SETTINGS, 'ProxyServer', 'http://127.0.0.1:' + str(self.config['listen']))
+            set_key(ENVIRONMENT_SETTING, 'HTTP_PROXY', 'http://127.0.0.1:' + str(self.config['listen']))
+            set_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY', 'http://127.0.0.1:' + str(self.config['listen']))
             internet_set_option = ctypes.windll.wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
@@ -919,12 +923,28 @@ class windows(QtWidgets.QMainWindow):
         platform = sys.platform
         if platform == 'win32':
             INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
+            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
 
-            def set_key(name, value):
-                _, reg_type = winreg.QueryValueEx(INTERNET_SETTINGS, name)
-                winreg.SetValueEx(INTERNET_SETTINGS, name, 0, reg_type, value)
+            def set_key(root, name, value):
+                try:
+                    _, reg_type = winreg.QueryValueEx(root, name)
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
+                except Exception:
+                    if type(value) == type("a"):
+                        reg_type = 1
+                    elif type(value) == type(1):
+                        reg_type = 4
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
 
-            set_key('ProxyEnable', 0)
+            def delete_key(root, name):
+                try:
+                    winreg.DeleteValue(root, name)
+                except Exception:
+                    pass
+
+            set_key(INTERNET_SETTINGS, 'ProxyEnable', 0)
+            delete_key(ENVIRONMENT_SETTING, 'HTTP_PROXY')
+            delete_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY')
             internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
