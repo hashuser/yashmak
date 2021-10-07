@@ -60,7 +60,6 @@ class yashmak_core():
             server_writer = None
             tasks = None
             data = await asyncio.wait_for(client_reader.read(65535),20)
-            print(data)
             if data == b'':
                 raise Exception
             data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
