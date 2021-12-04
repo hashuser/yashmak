@@ -2,8 +2,8 @@
 main(){
   update-ca-certificates -f
   wget https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1l.tar.gz
-  tar xzvf OpenSSL_1_1_1l.tar
-  cd OpenSSL_1_1_1l.tar
+  tar xzvf OpenSSL_1_1_1l.tar.gz
+  cd OpenSSL_1_1_1l.tar.gz
   ./config
   make
   make install
