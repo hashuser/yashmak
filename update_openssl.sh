@@ -1,9 +1,9 @@
 #!/bin/bash
 main(){
   update-ca-certificates -f
-  wget https://www.openssl.org/source/old/1.1.1/openssl-1.1.1j.tar.gz
-  tar xzvf openssl-1.1.1j.tar.gz
-  cd openssl-1.1.1j
+  wget https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_1_1l.tar.gz
+  tar xzvf openssl-OpenSSL_1_1_1l.tar
+  cd openssl-OpenSSL_1_1_1l.tar
   ./config
   make
   make install
