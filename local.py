@@ -1,5 +1,6 @@
 from PyQt5 import QtWidgets, QtGui, QtCore
 from dns import message
+import base64
 import asyncio
 import socket
 import ssl
@@ -32,14 +33,7 @@ class yashmak_core():
                 listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
                                                 dualstack_ipv6=False)
             server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
-            self.context = self.get_context()
-            self.connection_pool = []
-            self.dns_pool = dict()
-            self.dns_ttl = dict()
-            self.ipv6 = False
-            self.is_updating = True
-            self.main_port_fail = 0
-            self.backup(self.config['white_list'], 'old.json')
+            self.init()
             self.loop.set_exception_handler(self.exception_handler)
             self.loop.create_task(server)
             #self.loop.create_task(self.TCP_ping())
@@ -54,6 +48,18 @@ class yashmak_core():
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+
+    def init(self):
+        self.proxy_context = self.get_proxy_context()
+        self.normal_context = self.get_normal_context()
+        self.connection_pool = []
+        self.connection_count = 0
+        self.dns_pool = dict()
+        self.dns_ttl = dict()
+        self.ipv6 = False
+        self.is_updating = True
+        self.main_port_fail = 0
+        self.backup(self.config['white_list'], 'old.json')
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -236,7 +242,7 @@ class yashmak_core():
             try:
                 server_reader, server_writer = await asyncio.open_connection(host=self.config['host'],
                                                                              port=x,
-                                                                             ssl=self.context,
+                                                                             ssl=self.proxy_context,
                                                                              server_hostname=self.config['host'],
                                                                              ssl_handshake_timeout=5)
                 return server_reader, server_writer
@@ -521,6 +527,15 @@ class yashmak_core():
             error.__traceback__ = None
         return False
 
+    def is_ipv6(self, ip):
+        try:
+            if b':' in ip and b'::ffff:' not in ip:
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
     def is_china_ip(self, ip):
         ip = ip.replace(b'::ffff:',b'',1)
         ip = int(ipaddress.ip_address(ip.decode('utf-8')))
@@ -536,13 +551,22 @@ class yashmak_core():
                 right = mid - 1
         return False
 
-    def get_context(self):
+    def get_proxy_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.set_alpn_protocols(['h2', 'http/1.1'])
         context.verify_mode = ssl.CERT_REQUIRED
         context.check_hostname = True
         context.load_verify_locations(self.config_path + self.config['cert'])
+        return context
+
+    def get_normal_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_default_certs()
         return context
 
     async def ipv6_test(self):
@@ -556,20 +580,19 @@ class yashmak_core():
             error.__traceback__ = None
             await self.clean_up(server_writer, None)
 
-    async def resolve(self,q_type,host):
+    async def resolve(self,q_type,host,doh=True):
         if self.is_ip(host):
-            if not self.ipv6:
-                host = host.replace(b'::ffff:',b'')
+            host = host.replace(b'::ffff:',b'')
             return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
             return self.dns_pool[host][q_type]
-        return (await self.query(host))[q_type]
+        return (await self.query(host,doh))[q_type]
 
-    async def query(self,host):
+    async def query(self,host,doh):
         ipv4 = None
         ipv6 = None
         for x in range(12):
-            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A'), self.query_worker(host, 'AAAA'))
+            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A', doh), self.query_worker(host, 'AAAA', doh))
             if ipv4 != None and ipv6 != None:
                 break
             await asyncio.sleep(0.5)
@@ -579,18 +602,9 @@ class yashmak_core():
             self.dns_ttl[host] = time.time()
         return result
 
-    async def query_worker(self, host, q_type):
+    async def query_worker(self, host, q_type, doh):
         try:
-            if q_type == 'A':
-                mq_type = 1
-            elif q_type == 'AAAA':
-                mq_type = 28
-            query = message.make_query(host.decode('utf-8'), mq_type)
-            query = query.to_wire()
-            tasks = []
-            for x in self.config['dns']:
-                tasks.append(asyncio.create_task(self.get_query_response(query,(x, 53))))
-            done, pending = await asyncio.wait(tasks,return_when=asyncio.FIRST_COMPLETED)
+            done, pending, = await asyncio.wait(await self.make_tasks(host, q_type, doh),return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
             result = message.from_wire(done.pop().result())
@@ -599,19 +613,68 @@ class yashmak_core():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def get_query_response(self, query, address):
+    async def make_tasks(self, host, q_type, doh):
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            await self.loop.sock_connect(s, address)
+            if q_type == 'A':
+                mq_type = 1
+            elif q_type == 'AAAA':
+                mq_type = 28
+            query = message.make_query(host.decode('utf-8'), mq_type)
+            query = query.to_wire()
+            tasks = []
+            for x in self.config['normal_dns']:
+                tasks.append(asyncio.create_task(self.get_normal_query_response(query, (x, 53))))
+            if doh:
+                for x in self.config['doh_dns']:
+                    v4 = await self.resolve('A', x, False)
+                    v6 = await self.resolve('AAAA', x, False)
+                    if v4 != []:
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v4[0], 443), x)))
+                    if v6 != []:
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v6[0], 443), x)))
+            return tasks
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    async def get_normal_query_response(self, query, address):
+        try:
+            if self.is_ipv6(address[0]):
+                s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            else:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
             await self.loop.sock_sendall(s, query)
-            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024),4)
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 4096),4)
             return result
         except Exception as error:
+            await asyncio.sleep(5)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(s, None)
         finally:
             await self.clean_up(s, None)
+
+    async def get_doh_query_response(self, query, address, hostname):
+        try:
+            server_writer = None
+            server_reader, server_writer = await asyncio.open_connection(host=address[0],
+                                                                         port=address[1],
+                                                                         ssl=self.normal_context,
+                                                                         server_hostname=hostname,
+                                                                         ssl_handshake_timeout=5)
+            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
+            await server_writer.drain()
+            result = await asyncio.wait_for(server_reader.read(4096),4)
+            result = result[result.find(b'\r\n\r\n')+4:]
+            return result
+        except Exception as error:
+            await asyncio.sleep(5)
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer, None)
+        finally:
+            await self.clean_up(server_writer, None)
 
     def decode(self,result,type):
         IPs = []
@@ -714,13 +777,14 @@ class yashmak(yashmak_core):
             self.config[self.config['active']]['black_list'] = self.config_path + self.config['black_list']
             self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
             self.config[self.config['active']]['geoip_list'] = self.config_path + self.config['geoip_list']
-            self.config[self.config['active']]['dns'] = self.config['dns']
+            self.config[self.config['active']]['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
+            self.config[self.config['active']]['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
-                       'dns': [''], 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
+                       'normal_dns': [''], 'doh_dns': [''], 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -905,11 +969,11 @@ class windows(QtWidgets.QMainWindow):
             content = self.translate(content)
             config = json.loads(content)
         if config['mode'].lower() == 'auto':
-            self.option_switcher(['Auto', 'Global', 'Direct'], 'Auto')
+            self.set_mode_UI('Auto')
         elif config['mode'].lower() == 'global':
-            self.option_switcher(['Auto', 'Global', 'Direct'], 'Global')
+            self.set_mode_UI('Global')
         elif config['mode'].lower() == 'direct':
-            self.option_switcher(['Auto', 'Global', 'Direct'], 'Direct')
+            self.set_mode_UI('Direct')
         if config['startup'].lower() == 'auto':
             self.auto_startup(True)
             self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
@@ -1091,6 +1155,9 @@ class windows(QtWidgets.QMainWindow):
         self.edit_config('mode', mode.lower())
         self.run()
         self.pop_message(mes[mode])
+        self.set_mode_UI(mode)
+
+    def set_mode_UI(self,mode):
         self.option_switcher(['Auto', 'Global', 'Direct'], mode)
 
     def text_translator(self,message):
