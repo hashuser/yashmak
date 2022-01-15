@@ -23,27 +23,32 @@ asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 class yashmak_worker():
     def __init__(self,config,host_list,dns_pool,dns_ttl,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
-        self.loop = asyncio.get_event_loop()
-        if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
-                                            reuse_port=True,dualstack_ipv6=True)
-        else:
-            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
-                                            reuse_port=True,dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_proxy_context())
         self.normal_context = self.get_normal_context()
         self.host_list = host_list
         self.geoip_list = geoip_list
         self.dns_pool = dns_pool
         self.dns_ttl = dns_ttl
         self.exception_list_name = exception_list_name
-        self.local_path = local_path 
+        self.local_path = local_path
         self.utc_difference = utc_difference
         self.start_time = start_time
         self.ipv6 = False
         self.log = []
+        self.create_loop()
+
+    def create_server(self):
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET6,
+                                            reuse_port=True,dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
+                                            reuse_port=True,dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_proxy_context())
+
+    def create_loop(self):
+        self.loop = asyncio.get_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
-        self.loop.create_task(server)
+        self.loop.create_task(self.create_server())
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
         self.loop.create_task(self.updater_cache())
