@@ -1,6 +1,7 @@
 import asyncio
 import multiprocessing
 from dns import message
+import base64
 import socket
 import ssl
 import json
@@ -29,7 +30,8 @@ class yashmak_worker():
         else:
             listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
                                             reuse_port=True,dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_context())
+        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_proxy_context())
+        self.normal_context = self.get_normal_context()
         self.host_list = host_list
         self.geoip_list = geoip_list
         self.dns_pool = dns_pool
@@ -303,6 +305,15 @@ class yashmak_worker():
             error.__traceback__ = None
         return False
 
+    def is_ipv6(self, ip):
+        try:
+            if b':' in ip and b'::ffff:' not in ip:
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
     def is_china_ip(self, ip, host, uuid):
         if self.is_ip(host):
             return False
@@ -382,11 +393,20 @@ class yashmak_worker():
         else:
             return data
 
-    def get_context(self):
+    def get_proxy_context(self):
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.set_alpn_protocols(['http/1.1'])
         context.load_cert_chain(self.config['cert'], self.config['key'])
+        return context
+
+    def get_normal_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_default_certs()
         return context
     
     async def ipv6_test(self):
@@ -400,20 +420,19 @@ class yashmak_worker():
             error.__traceback__ = None
             await self.clean_up(server_writer, None)
 
-    async def resolve(self,q_type,host):
+    async def resolve(self,q_type,host,doh=True):
         if self.is_ip(host):
-            if not self.ipv6:
-                host = host.replace(b'::ffff:',b'')
+            host = host.replace(b'::ffff:',b'')
             return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
             return self.dns_pool[host][q_type]
-        return (await self.query(host))[q_type]
+        return (await self.query(host,doh))[q_type]
 
-    async def query(self,host):
+    async def query(self,host,doh):
         ipv4 = None
         ipv6 = None
         for x in range(12):
-            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A'), self.query_worker(host, 'AAAA'))
+            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A', doh), self.query_worker(host, 'AAAA', doh))
             if ipv4 != None and ipv6 != None:
                 break
             await asyncio.sleep(0.5)
@@ -423,7 +442,18 @@ class yashmak_worker():
             self.dns_ttl[host] = time.time()
         return result
 
-    async def query_worker(self, host, q_type):
+    async def query_worker(self, host, q_type, doh):
+        try:
+            done, pending, = await asyncio.wait(await self.make_tasks(host, q_type, doh),return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+            result = message.from_wire(done.pop().result())
+            return self.decode(str(result), q_type)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    async def make_tasks(self, host, q_type, doh):
         try:
             if q_type == 'A':
                 mq_type = 1
@@ -431,17 +461,60 @@ class yashmak_worker():
                 mq_type = 28
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            await self.loop.sock_connect(s, (self.config['dns'], 53))
-            await self.loop.sock_sendall(s, query)
-            result = await asyncio.wait_for(self.loop.sock_recv(s, 1024), 4)
-            await self.clean_up(s, None)
-            result = message.from_wire(result)
-            return self.decode(str(result), q_type)
+            tasks = []
+            for x in self.config['normal_dns']:
+                tasks.append(asyncio.create_task(self.get_normal_query_response(query, (x, 53))))
+            if doh:
+                for x in self.config['doh_dns']:
+                    v4 = await self.resolve('A', x, False)
+                    v6 = await self.resolve('AAAA', x, False)
+                    if v4 != []:
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v4[0], 443), x)))
+                    if v6 != []:
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v6[0], 443), x)))
+            return tasks
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+
+    async def get_normal_query_response(self, query, address):
+        try:
+            if self.is_ipv6(address[0]):
+                s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+            else:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
+            await self.loop.sock_sendall(s, query)
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 4096),4)
+            return result
+        except Exception as error:
+            await asyncio.sleep(5)
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
             await self.clean_up(s, None)
+        finally:
+            await self.clean_up(s, None)
+
+    async def get_doh_query_response(self, query, address, hostname):
+        try:
+            server_writer = None
+            server_reader, server_writer = await asyncio.open_connection(host=address[0],
+                                                                         port=address[1],
+                                                                         ssl=self.normal_context,
+                                                                         server_hostname=hostname,
+                                                                         ssl_handshake_timeout=5)
+            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36\r\n\r\n')
+            await server_writer.drain()
+            result = await asyncio.wait_for(server_reader.read(4096),4)
+            result = result[result.find(b'\r\n\r\n')+4:]
+            return result
+        except Exception as error:
+            await asyncio.sleep(5)
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer, None)
+        finally:
+            await self.clean_up(server_writer, None)
 
     def decode(self,result,type):
         IPs = []
@@ -463,11 +536,15 @@ class yashmak_worker():
                     if (time.time() - self.dns_ttl[x]) > 600:
                         del self.dns_pool[x]
                         del self.dns_ttl[x]
-                await asyncio.sleep(300)
+                for x in range(600):
+                    S = time.time()
+                    await asyncio.sleep(0.5)
+                    E = time.time()
+                    if E - S > 1.5:
+                        break
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-
 
 class yashmak_log():
     def __init__(self,start_time,local_path, port):
@@ -629,8 +706,11 @@ class yashmak():
             self.config = json.loads(content)
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['port'] = int(self.config['port'])
+            self.config['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
+            self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
         else:
-            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'dns': '', 'ip': '', 'port': ''}
+            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': ''
+                , 'doh_dns': '', 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
