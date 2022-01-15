@@ -25,26 +25,7 @@ gc.set_threshold(100000, 50, 50)
 class yashmak_core():
     def __init__(self):
         try:
-            self.loop = asyncio.get_event_loop()
-            if socket.has_dualstack_ipv6():
-                listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
-                                                dualstack_ipv6=True)
-            else:
-                listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
-                                                dualstack_ipv6=False)
-            server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
             self.init()
-            self.loop.set_exception_handler(self.exception_handler)
-            self.loop.create_task(server)
-            #self.loop.create_task(self.TCP_ping())
-            self.loop.create_task(self.pool())
-            self.loop.create_task(self.pool_health())
-            self.loop.create_task(self.white_list_updater())
-            self.loop.create_task(self.yashmak_updater())
-            self.loop.create_task(self.clear_cache())
-            self.loop.create_task(self.check_parent())
-            self.loop.create_task(self.ipv6_test())
-            self.loop.run_forever()
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -60,6 +41,35 @@ class yashmak_core():
         self.is_updating = True
         self.main_port_fail = 0
         self.backup(self.config['white_list'], 'old.json')
+        self.set_priority()
+        self.create_loop()
+
+    def create_server(self):
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
+                                            dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+
+    def create_loop(self):
+        self.loop = asyncio.get_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.create_server())
+        # self.loop.create_task(self.TCP_ping())
+        self.loop.create_task(self.pool())
+        self.loop.create_task(self.pool_health())
+        self.loop.create_task(self.white_list_updater())
+        self.loop.create_task(self.yashmak_updater())
+        self.loop.create_task(self.clear_cache())
+        self.loop.create_task(self.check_parent())
+        self.loop.create_task(self.ipv6_test())
+        self.loop.run_forever()
+
+    def set_priority(self):
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
 
     async def handler(self, client_reader, client_writer):
         try:
@@ -70,7 +80,7 @@ class yashmak_core():
                 raise Exception
             data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
             await self.redirect(client_writer,host,URL)
-            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_reader,client_writer,self.get_type(host))
+            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_writer,self.get_type(host))
             await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
                                  self.switch(server_reader, client_writer, server_writer, False))
         except Exception as error:
@@ -117,63 +127,84 @@ class yashmak_core():
                         return True
 
             if URL != None and HSTS(self.HSTS_list,host):
-                writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
-                await writer.drain()
+                await self.http_response(writer, 301, URL)
                 await self.clean_up(writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(writer)
+            raise Exception(error)
 
-    async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
+    async def proxy(self, host, port, request_type, data, client_writer, type):
         server_writer = None
         try:
-            if not type:
-                IPs = await self.resolve('A',host)
-                if IPs == None:
-                    client_writer.write(b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
-                    await client_writer.drain()
-                    raise Exception
-            else:
-                IPs = [None]
-            IPs_length = len(IPs)
-            for x in range(IPs_length):
-                address = IPs[int(random.random() * 1000 % IPs_length)]
-                if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
-                    if len(self.connection_pool) == 0:
-                        server_reader, server_writer = await self.connect_proxy_server()
-                        self.is_updating = False
-                        server_writer.write(self.config['uuid'])
-                        await server_writer.drain()
-                    else:
-                        server_reader, server_writer = self.connection_pool.pop(-1)
-                    server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
-                    await server_writer.drain()
-                    server_writer.write(host + b'\n' + port + b'\n')
-                    await server_writer.drain()
-                elif address != '127.0.0.1':
-                    try:
-                        server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
-                    except Exception as error:
-                        traceback.clear_frames(error.__traceback__)
-                        error.__traceback__ = None
-                        continue
-                elif not request_type:
-                    client_writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
-                    await client_writer.drain()
-                    raise Exception
-                if not request_type:
-                    client_writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
-                    await client_writer.drain()
-                elif data != None:
-                    server_writer.write(data)
-                    await server_writer.drain()
-                break
+            server_reader, server_writer = await self.make_proxy(host,port,data,request_type,type,client_writer)
             return server_reader, server_writer
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(client_writer, server_writer)
+            raise Exception(error)
+
+    async def make_proxy(self,host,port,data,request_type,type,client_writer):
+        IPs = await self.get_IPs(type,host,client_writer)
+        IPs_length = len(IPs)
+        for x in range(IPs_length):
+            address = IPs[int(random.random() * 1000 % IPs_length)]
+            if type or (self.config['mode'] == 'auto' and not self.is_china_ip(address)):
+                server_reader, server_writer = await self.do_handshake(host, port)
+            elif address != '127.0.0.1':
+                try:
+                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+                    continue
+            elif not request_type:
+                await self.http_response(client_writer, 404)
+                raise Exception
+            if not request_type:
+                await self.http_response(client_writer, 200)
+            elif data != None:
+                server_writer.write(data)
+                await server_writer.drain()
+            break
+        return server_reader, server_writer
+
+    async def get_IPs(self,type,host,client_writer):
+        if not type:
+            IPs = await self.resolve('A', host)
+            if IPs == None:
+                await self.http_response(client_writer, 502)
+                raise Exception
+        else:
+            IPs = [None]
+        return IPs
+
+    async def do_handshake(self,host,port):
+        if len(self.connection_pool) == 0:
+            server_reader, server_writer = await self.connect_proxy_server()
+            self.is_updating = False
+            server_writer.write(self.config['uuid'])
+            await server_writer.drain()
+        else:
+            server_reader, server_writer = self.connection_pool.pop(-1)
+        server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True))
+        await server_writer.drain()
+        server_writer.write(host + b'\n' + port + b'\n')
+        await server_writer.drain()
+        return server_reader, server_writer
+
+    async def http_response(self,writer,type,URL=None):
+        if type == 200:
+            writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
+        elif type == 301:
+            writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+        elif type == 404:
+            writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
+        elif type == 502:
+            writer.write(b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
+        else:
+            raise Exception('Unknown Status Code')
+        await writer.drain()
 
     async def clean_up(self, writer1=None, writer2=None):
         try:
