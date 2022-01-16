@@ -16,6 +16,7 @@ import ntplib
 import uvloop
 import random
 import gc
+import psutil
 
 gc.set_threshold(100000, 50, 50)
 
@@ -35,6 +36,7 @@ class yashmak_worker():
         self.ipv4 = True
         self.ipv6 = True
         self.log = []
+        self.set_priority()
         self.create_loop()
 
     def create_server(self):
@@ -57,6 +59,10 @@ class yashmak_worker():
         self.loop.create_task(self.ipv4_test())
         self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
+
+    def set_priority(self):
+        p = psutil.Process(os.getpid())
+        p.nice(-10)
 
     async def handler(self, client_reader, client_writer):
         try:
