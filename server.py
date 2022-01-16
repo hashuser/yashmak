@@ -32,7 +32,8 @@ class yashmak_worker():
         self.local_path = local_path
         self.utc_difference = utc_difference
         self.start_time = start_time
-        self.ipv6 = False
+        self.ipv4 = True
+        self.ipv6 = True
         self.log = []
         self.create_loop()
 
@@ -53,6 +54,7 @@ class yashmak_worker():
         self.loop.create_task(self.write_log())
         self.loop.create_task(self.updater_cache())
         self.loop.create_task(self.clear_cache())
+        self.loop.create_task(self.ipv4_test())
         self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
 
@@ -75,7 +77,7 @@ class yashmak_worker():
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     await self.redirect(client_writer, host, uuid)
-                    IPs = await self.resolve('A',host)
+                    IPs = await self.get_IPs(host)
                     IPs_length = len(IPs)
                     for x in range(IPs_length):
                         address = IPs[int(random.random() * 1000 % IPs_length)]
@@ -96,6 +98,19 @@ class yashmak_worker():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
+
+    async def get_IPs(self,host):
+        if self.ipv4 and self.ipv6:
+            IPs = await self.resolve('ALL', host)
+        elif self.ipv4:
+            IPs = await self.resolve('A', host)
+        elif self.ipv6:
+            IPs = await self.resolve('AAAA', host)
+        else:
+            raise Exception('No IP Error')
+        if IPs == None:
+            raise Exception
+        return IPs
 
     def HTTP_header_decoder(self, header):
         lower = [b'a',b'b',b'c',b'd',b'e',b'f',b'g',b'h',b'i',b'j',b'k',b'l',b'm',b'n',b'o',b'p',b'q',b'r',b's',b't',b'u',b'v',b'w',b'x',b'y',b'z']
@@ -414,16 +429,41 @@ class yashmak_worker():
         context.load_default_certs()
         return context
     
+    async def ipv4_test(self):
+        tasks = [('8.8.8.8',53), ('1.1.1.1',53),('ipv4.test-ipv6-vm3.comcast.net',443), ('ipv4.lookup.test-ipv6.com',443),
+                 ('ipv4.test-ipv6.epic.network',443)]
+        fail = 0
+        for task in tasks:
+            try:
+                server_writer = None
+                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
+                await self.clean_up(server_writer, None)
+                break
+            except Exception as error:
+                fail += 1
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer, None)
+        if fail >= len(tasks):
+            self.ipv6 = False
+
     async def ipv6_test(self):
-        try:
-            server_writer = None
-            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='ipv6.lookup.test-ipv6.com', port=443), 5)
-            self.ipv6 = True
-            await self.clean_up(server_writer, None)
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            await self.clean_up(server_writer, None)
+        tasks = [('2001:4860:4860::8888',53), ('2606:4700:4700::1111',53),('ipv6.test-ipv6-vm3.comcast.net',443), ('ipv6.lookup.test-ipv6.com',443),
+                 ('ipv6.test-ipv6.epic.network',443)]
+        fail = 0
+        for task in tasks:
+            try:
+                server_writer = None
+                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
+                await self.clean_up(server_writer, None)
+                break
+            except Exception as error:
+                fail += 1
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer, None)
+        if fail >= len(tasks):
+            self.ipv6 = False
 
     async def resolve(self,q_type,host,doh=True):
         if self.is_ip(host):
@@ -441,7 +481,7 @@ class yashmak_worker():
             if ipv4 != None and ipv6 != None:
                 break
             await asyncio.sleep(0.5)
-        result = {'A':ipv4,'AAAA':ipv6}
+        result = {'A':ipv4,'AAAA':ipv6,'ALL':ipv4+ipv6}
         if ipv4 != None and ipv6 != None:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
@@ -508,7 +548,7 @@ class yashmak_worker():
                                                                          ssl=self.normal_context,
                                                                          server_hostname=hostname,
                                                                          ssl_handshake_timeout=5)
-            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36\r\n\r\n')
+            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
             await server_writer.drain()
             result = await asyncio.wait_for(server_reader.read(4096),4)
             result = result[result.find(b'\r\n\r\n')+4:]
@@ -714,8 +754,8 @@ class yashmak():
             self.config['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
             self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
         else:
-            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': ''
-                , 'doh_dns': '', 'ip': '', 'port': ''}
+            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': ['']
+                , 'doh_dns': [''], 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
