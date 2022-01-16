@@ -126,6 +126,7 @@ install_Yashmak(){
   python3.9 -m pip install dnspython
   python3.9 -m pip install uvloop
   python3.9 -m pip install ntplib
+  python3.9 -m pip install psutil
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
