@@ -37,7 +37,8 @@ class yashmak_core():
         self.connection_count = 0
         self.dns_pool = dict()
         self.dns_ttl = dict()
-        self.ipv6 = False
+        self.ipv4 = True
+        self.ipv6 = True
         self.is_updating = True
         self.main_port_fail = 0
         self.backup(self.config['white_list'], 'old.json')
@@ -64,6 +65,7 @@ class yashmak_core():
         self.loop.create_task(self.yashmak_updater())
         self.loop.create_task(self.clear_cache())
         self.loop.create_task(self.check_parent())
+        self.loop.create_task(self.ipv4_test())
         self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
 
@@ -171,7 +173,15 @@ class yashmak_core():
 
     async def get_IPs(self,type,host,client_writer):
         if not type:
-            IPs = await self.resolve('A', host)
+            if self.ipv4 and self.ipv6:
+                IPs = await self.resolve('ALL', host)
+            elif self.ipv4:
+                IPs = await self.resolve('A', host)
+            elif self.ipv6:
+                IPs = await self.resolve('AAAA', host)
+            else:
+                await self.http_response(client_writer, 502)
+                raise Exception('No IP Error')
             if IPs == None:
                 await self.http_response(client_writer, 502)
                 raise Exception
@@ -600,16 +610,41 @@ class yashmak_core():
         context.load_default_certs()
         return context
 
+    async def ipv4_test(self):
+        tasks = [('114.114.114.114',53), ('119.29.29.29',53),('ipv4.testipv6.cn',443), ('ipv4.lookup.test-ipv6.com',443),
+                 ('ipv4.test-ipv6.hkg.vr.org',443)]
+        fail = 0
+        for task in tasks:
+            try:
+                server_writer = None
+                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
+                await self.clean_up(server_writer, None)
+                break
+            except Exception as error:
+                fail += 1
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer, None)
+        if fail >= len(tasks):
+            self.ipv6 = False
+
     async def ipv6_test(self):
-        try:
-            server_writer = None
-            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='ipv6.lookup.test-ipv6.com', port=443), 5)
-            self.ipv6 = True
-            await self.clean_up(server_writer, None)
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            await self.clean_up(server_writer, None)
+        tasks = [('2400:3200:baba::1',53), ('2402:4e00::',53), ('ipv6.testipv6.cn',443), ('ipv6.lookup.test-ipv6.com',443),
+                 ('ipv6.test-ipv6.hkg.vr.org',443)]
+        fail = 0
+        for task in tasks:
+            try:
+                server_writer = None
+                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
+                await self.clean_up(server_writer, None)
+                break
+            except Exception as error:
+                fail += 1
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer, None)
+        if fail >= len(tasks):
+            self.ipv6 = False
 
     async def resolve(self,q_type,host,doh=True):
         if self.is_ip(host):
@@ -627,7 +662,7 @@ class yashmak_core():
             if ipv4 != None and ipv6 != None:
                 break
             await asyncio.sleep(0.5)
-        result = {'A':ipv4,'AAAA':ipv6}
+        result = {'A':ipv4,'AAAA':ipv6,'ALL':ipv4+ipv6}
         if ipv4 != None and ipv6 != None:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
