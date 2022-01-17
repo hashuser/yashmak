@@ -66,8 +66,7 @@ class yashmak_worker():
 
     async def handler(self, client_reader, client_writer):
         try:
-            server_writer = None
-            tasks = None
+            server_reader, server_writer = None, None
             uuid = await asyncio.wait_for(client_reader.read(36),10)
             if uuid not in self.config['uuid']:
                 peer = client_writer.get_extra_info("peername")[0]
@@ -83,15 +82,7 @@ class yashmak_worker():
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     await self.redirect(client_writer, host, uuid)
-                    IPs = await self.get_IPs(host)
-                    IPs_length = len(IPs)
-                    for x in range(IPs_length):
-                        address = IPs[int(random.random() * 1000 % IPs_length)]
-                        self.is_china_ip(address, host, uuid)
-                        server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
-                        break
-                    await asyncio.gather(self.switch(client_reader, server_writer, client_writer),
-                                         self.switch(server_reader, client_writer, server_writer))
+                    await self.proxy(host,port,uuid,client_reader,client_writer)
                 elif data == -4:
                     await self.echo(client_writer, client_reader)
                 elif data == -2:
@@ -105,6 +96,36 @@ class yashmak_worker():
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
+    async def proxy(self, host, port, uuid, client_reader, client_writer):
+        server_reader, server_writer = None, None
+        try:
+            server_reader, server_writer = await self.make_proxy(host,port,uuid)
+            if server_reader == None or server_writer == None:
+                raise Exception
+            done, pending = await asyncio.wait(await self.make_switches(client_reader, client_writer, server_reader, server_writer),return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(client_writer, server_writer)
+
+    async def make_proxy(self,host,port,uuid):
+        server_reader, server_writer = None, None
+        IPs = await self.get_IPs(host)
+        IPs_length = len(IPs)
+        for x in range(IPs_length):
+            address = IPs[int(random.random() * 1000 % IPs_length)]
+            self.is_china_ip(address, host, uuid)
+            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
+            break
+        if server_reader == None or server_writer == None:
+            raise Exception
+        return server_reader,server_writer
+
+    async def make_switches(self,cr,cw,sr,sw):
+        return [asyncio.create_task(self.switch(cr,sw)),asyncio.create_task(self.switch(sr,cw))]
+
     async def get_IPs(self,host):
         if self.ipv4 and self.ipv6:
             IPs = await self.resolve('ALL', host)
@@ -114,7 +135,7 @@ class yashmak_worker():
             IPs = await self.resolve('AAAA', host)
         else:
             raise Exception('No IP Error')
-        if IPs == None:
+        if IPs == None or IPs == []:
             raise Exception
         return IPs
 
@@ -198,7 +219,7 @@ class yashmak_worker():
             error.__traceback__ = None
             await self.clean_up(None, writer)
 
-    async def switch(self, reader, writer, other):
+    async def switch(self, reader, writer):
         try:
             while 1:
                 data = await reader.read(32768)
@@ -206,10 +227,10 @@ class yashmak_worker():
                     raise Exception
                 writer.write(data)
                 await writer.drain()
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(writer, other)
+            await self.clean_up(writer)
 
     async def TCP_ping(self, writer, reader):
         try:
@@ -285,27 +306,27 @@ class yashmak_worker():
         try:
             if writer1 != None:
                 writer1.close()
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 writer2.close()
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer1 != None:
                 await writer1.wait_closed()
                 writer1 = None
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
                 writer2 = None
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
