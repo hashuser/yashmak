@@ -39,7 +39,6 @@ class yashmak_core():
         self.dns_ttl = dict()
         self.ipv4 = True
         self.ipv6 = True
-        self.is_updating = True
         self.main_port_fail = 0
         self.backup(self.config['white_list'], 'old.json')
         self.set_priority()
@@ -75,45 +74,52 @@ class yashmak_core():
 
     async def handler(self, client_reader, client_writer):
         try:
-            server_writer = None
-            tasks = None
-            data = await asyncio.wait_for(client_reader.read(65535),20)
-            if data == b'':
-                raise Exception
-            data, URL, host, port, request_type = await self.process(data, client_reader, client_writer)
+            server_reader, server_writer = None, None
+            data, URL, host, port, request_type = await self.process(client_reader, client_writer)
             await self.redirect(client_writer,host,URL)
-            server_reader, server_writer = await self.proxy(host,port,request_type,data,client_writer,self.get_type(host))
-            await asyncio.gather(self.switch(client_reader, server_writer, client_writer, True),
-                                 self.switch(server_reader, client_writer, server_writer, False))
+            await self.proxy(host,port,request_type,data,client_reader,client_writer,self.get_type(host))
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
-    async def switch(self, reader, writer, other, up):
+    async def make_switches(self,cr,cw,sr,sw,request_type):
+        if request_type == 1 or request_type == 2:
+            scan = True
+        else:
+            scan = False
+        return [asyncio.create_task(self.switch_up(cr,sw,scan)),asyncio.create_task(self.switch_down(sr,cw))]
+
+    async def switch_down(self, reader, writer):
         try:
-            if not up:
-                while 1:
-                    data = await reader.read(16384)
-                    if data == b'':
-                        raise Exception
-                    writer.write(data)
-                    await writer.drain()
-            else:
-                while 1:
-                    data = await reader.read(65536)
-                    if data == b'':
-                        raise Exception
+            while 1:
+                data = await reader.read(16384)
+                if data == b'':
+                    raise Exception
+                writer.write(data)
+                await writer.drain()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(writer)
+
+    async def switch_up(self, reader, writer, scan):
+        try:
+            while 1:
+                data = await reader.read(65536)
+                if data == b'':
+                    raise Exception
+                if scan:
                     instruction = data[:4]
                     if b'GET' in instruction or b'POST' in instruction:
                         URL, host, port = self.get_http_address_new(data, 1, False)
                         data = self.get_response(data, host, port)
-                    writer.write(data)
-                    await writer.drain()
-        except Exception as error:
+                writer.write(data)
+                await writer.drain()
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(writer, other)
+            await self.clean_up(writer)
 
     async def redirect(self, writer, host, URL):
         try:
@@ -136,15 +142,19 @@ class yashmak_core():
             error.__traceback__ = None
             raise Exception(error)
 
-    async def proxy(self, host, port, request_type, data, client_writer, type):
-        server_writer = None
+    async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
+        server_reader, server_writer = None, None
         try:
             server_reader, server_writer = await self.make_proxy(host,port,data,request_type,type,client_writer)
-            return server_reader, server_writer
+            if server_reader == None or server_writer == None:
+                raise Exception
+            done, pending = await asyncio.wait(await self.make_switches(client_reader, client_writer, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            raise Exception(error)
+            await self.clean_up(client_writer, server_writer)
 
     async def make_proxy(self,host,port,data,request_type,type,client_writer):
         IPs = await self.get_IPs(type,host,client_writer)
@@ -182,7 +192,7 @@ class yashmak_core():
             else:
                 await self.http_response(client_writer, 502)
                 raise Exception('No IP Error')
-            if IPs == None:
+            if IPs == None or IPs == []:
                 await self.http_response(client_writer, 502)
                 raise Exception
         else:
@@ -192,7 +202,6 @@ class yashmak_core():
     async def do_handshake(self,host,port):
         if len(self.connection_pool) == 0:
             server_reader, server_writer = await self.connect_proxy_server()
-            self.is_updating = False
             server_writer.write(self.config['uuid'])
             await server_writer.drain()
         else:
@@ -220,27 +229,27 @@ class yashmak_core():
         try:
             if writer1 != None:
                 writer1.close()
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 writer2.close()
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer1 != None:
                 await writer1.wait_closed()
                 writer1 = None
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
                 writer2 = None
-        except Exception as error:
+        except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
@@ -263,7 +272,6 @@ class yashmak_core():
     async def make_connections(self):
         try:
             server_reader, server_writer = await self.connect_proxy_server()
-            self.is_updating = False
             server_writer.write(self.config['uuid'])
             await server_writer.drain()
             self.connection_pool.append((server_reader, server_writer))
@@ -293,7 +301,7 @@ class yashmak_core():
                 if x == self.config['port'] and (await self.has_internet()):
                     self.main_port_fail += 1
         if server_reader == None or server_writer == None:
-            self.update_yashmak()
+            #self.update_yashmak()
             raise Exception(error)
 
     async def pool_health(self):
@@ -379,9 +387,8 @@ class yashmak_core():
 
     def update_yashmak(self):
         try:
-            if not os.path.exists(self.config_path + 'download.json') and not self.is_updating:
+            if not os.path.exists(self.config_path + 'download.json'):
                 win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
-                self.is_updating = True
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -435,7 +442,10 @@ class yashmak_core():
     def exception_handler(self, loop, context):
         pass
 
-    async def process(self, data, client_reader, client_writer):
+    async def process(self, client_reader, client_writer):
+        data = await asyncio.wait_for(client_reader.read(65535), 20)
+        if data == b'':
+            raise Exception
         request_type = self.get_request_type(data)
         if request_type == 3:
             host, port = await self.get_socks5_address(client_reader, client_writer)
