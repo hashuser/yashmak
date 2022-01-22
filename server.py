@@ -19,8 +19,9 @@ import gc
 import psutil
 
 gc.set_threshold(100000, 50, 50)
-
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+
 class yashmak_worker():
     def __init__(self,config,host_list,dns_pool,dns_ttl,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
@@ -60,13 +61,14 @@ class yashmak_worker():
         self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
 
-    def set_priority(self):
+    @staticmethod
+    def set_priority():
         p = psutil.Process(os.getpid())
         p.nice(-10)
 
     async def handler(self, client_reader, client_writer):
+        server_reader, server_writer = None, None
         try:
-            server_reader, server_writer = None, None
             uuid = await asyncio.wait_for(client_reader.read(36),10)
             if uuid not in self.config['uuid']:
                 peer = client_writer.get_extra_info("peername")[0]
@@ -81,10 +83,10 @@ class yashmak_worker():
                 elif data > 0:
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
-                    await self.redirect(client_writer, host, uuid)
+                    await self.redirect(client_writer, host)
                     await self.proxy(host,port,uuid,client_reader,client_writer)
                 elif data == -4:
-                    await self.echo(client_writer, client_reader)
+                    await self.echo(client_writer)
                 elif data == -2:
                     await self.TCP_ping(client_writer, client_reader)
                 elif data == -3:
@@ -139,7 +141,8 @@ class yashmak_worker():
             raise Exception
         return IPs
 
-    def HTTP_header_decoder(self, header):
+    @staticmethod
+    def HTTP_header_decoder(header):
         lower = [b'a',b'b',b'c',b'd',b'e',b'f',b'g',b'h',b'i',b'j',b'k',b'l',b'm',b'n',b'o',b'p',b'q',b'r',b's',b't',b'u',b'v',b'w',b'x',b'y',b'z']
         number = [b'0',b'1',b'2',b'3',b'4',b'5',b'6',b'7',b'8',b'9']
         punctuation = [b'!',b'@',b'#',b'$',b'%',b'^',b'&',b'*',b'(',b')',b'-',b'=',b'_',b'+',b'{',b'}',b'[',b']',b'|',b';',b':',b',',b'.',b'/',b'<',b'>',b'?',b"'",b'"',b'~',b'`']
@@ -245,7 +248,7 @@ class yashmak_worker():
             await asyncio.sleep(5)
             await self.clean_up(writer)
 
-    async def echo(self, writer, reader):
+    async def echo(self, writer):
         try:
             writer.write(b'ok')
             await writer.drain()
@@ -254,9 +257,9 @@ class yashmak_worker():
             error.__traceback__ = None
             await self.clean_up(writer)
 
-    async def redirect(self, writer, host, uuid):
+    async def redirect(self, writer, host):
         try:
-            URL = self.host_list[b'blacklist'][self.is_banned(host, uuid)]
+            URL = self.host_list[b'blacklist'][self.is_banned(host)]
             if URL != None:
                 if URL[0:4] != b'http' and URL in self.host_list[b'blacklist']['tag']:
                     URL = self.host_list[b'blacklist']['tag'][URL]
@@ -301,8 +304,9 @@ class yashmak_worker():
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            
-    async def clean_up(self, writer1=None, writer2=None):
+
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
         try:
             if writer1 != None:
                 writer1.close()
@@ -318,14 +322,12 @@ class yashmak_worker():
         try:
             if writer1 != None:
                 await writer1.wait_closed()
-                writer1 = None
         except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
-                writer2 = None
         except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -336,14 +338,16 @@ class yashmak_worker():
     def process(self, data):
         return self.get_address(data)
 
-    def get_address(self, data):
+    @staticmethod
+    def get_address(data):
         position = data.find(b'\n')
         host = data[:position]
         position += 1
         port = data[position:data.find(b'\n', position)]
         return host, port
 
-    def is_ip(self,host):
+    @staticmethod
+    def is_ip(host):
         try:
             if b':' in host or int(host[host.rfind(b'.') + 1:]):
                 return True
@@ -352,7 +356,8 @@ class yashmak_worker():
             error.__traceback__ = None
         return False
 
-    def is_ipv6(self, ip):
+    @staticmethod
+    def is_ipv6(ip):
         try:
             if b':' in ip and b'::ffff:' not in ip:
                 return True
@@ -383,7 +388,7 @@ class yashmak_worker():
                 right = mid - 1
         return False
 
-    def is_banned(self, host, uuid):
+    def is_banned(self, host):
         if host in self.host_list[b'blacklist']:
             return host
         sigment_length = len(host)
@@ -421,7 +426,8 @@ class yashmak_worker():
                 self.log.clear()
             await asyncio.sleep(60)
 
-    def conclude(self, data):
+    @staticmethod
+    def conclude(data):
         def detect(data):
             if data.count(b':') != 0 or data.count(b'.') <= 1:
                 return False
@@ -447,7 +453,8 @@ class yashmak_worker():
         context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
 
-    def get_normal_context(self):
+    @staticmethod
+    def get_normal_context():
         context = ssl.SSLContext(ssl.PROTOCOL_TLS)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.set_alpn_protocols(['http/1.1'])
@@ -461,16 +468,16 @@ class yashmak_worker():
                  ('ipv4.test-ipv6.epic.network',443)]
         fail = 0
         for task in tasks:
+            server_writer = None
             try:
-                server_writer = None
                 server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer, None)
+                await self.clean_up(server_writer)
                 break
             except Exception as error:
                 fail += 1
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer, None)
+                await self.clean_up(server_writer)
         if fail >= len(tasks):
             self.ipv6 = False
 
@@ -479,16 +486,16 @@ class yashmak_worker():
                  ('ipv6.test-ipv6.epic.network',443)]
         fail = 0
         for task in tasks:
+            server_writer = None
             try:
-                server_writer = None
                 server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer, None)
+                await self.clean_up(server_writer)
                 break
             except Exception as error:
                 fail += 1
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer, None)
+                await self.clean_up(server_writer)
         if fail >= len(tasks):
             self.ipv6 = False
 
@@ -531,6 +538,8 @@ class yashmak_worker():
                 mq_type = 1
             elif q_type == 'AAAA':
                 mq_type = 28
+            else:
+                raise Exception
             query = message.make_query(host.decode('utf-8'), mq_type)
             query = query.to_wire()
             tasks = []
@@ -550,6 +559,7 @@ class yashmak_worker():
             error.__traceback__ = None
 
     async def get_normal_query_response(self, query, address):
+        s = None
         try:
             if self.is_ipv6(address[0]):
                 s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
@@ -563,19 +573,19 @@ class yashmak_worker():
             await asyncio.sleep(5)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(s, None)
+            await self.clean_up(s)
         finally:
-            await self.clean_up(s, None)
+            await self.clean_up(s)
 
     async def get_doh_query_response(self, query, address, hostname):
+        server_writer = None
         try:
-            server_writer = None
             server_reader, server_writer = await asyncio.open_connection(host=address[0],
                                                                          port=address[1],
                                                                          ssl=self.normal_context,
                                                                          server_hostname=hostname,
                                                                          ssl_handshake_timeout=5)
-            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
+            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') + b' HTTP/1.1\r\nHost: ' + hostname + b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
             await server_writer.drain()
             result = await asyncio.wait_for(server_reader.read(4096),4)
             result = result[result.find(b'\r\n\r\n')+4:]
@@ -584,11 +594,12 @@ class yashmak_worker():
             await asyncio.sleep(5)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(server_writer, None)
+            await self.clean_up(server_writer)
         finally:
-            await self.clean_up(server_writer, None)
+            await self.clean_up(server_writer)
 
-    def decode(self,result,type):
+    @staticmethod
+    def decode(result,type):
         IPs = []
         type = ' ' + type.upper() + ' '
         position = result.find(type)
@@ -597,8 +608,6 @@ class yashmak_worker():
         while position > 0:
             IPs.append(result[position + len(type):result.find('\n', position)].encode('utf-8'))
             position = result.find(type, position + len(type))
-        if result[-1] == '.':
-            result = result[:-1]
         return IPs
 
     async def clear_cache(self):
@@ -617,6 +626,7 @@ class yashmak_worker():
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+
 
 class yashmak_log():
     def __init__(self,start_time,local_path, port):
@@ -687,8 +697,9 @@ class yashmak_log():
                     file.write(x+'\n\n')
                 self.log.clear()
             await asyncio.sleep(60)
-    
-    async def clean_up(self, writer1=None, writer2=None):
+
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
         try:
             if writer1 != None:
                 writer1.close()
@@ -704,14 +715,12 @@ class yashmak_log():
         try:
             if writer1 != None:
                 await writer1.wait_closed()
-                writer1 = None
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         try:
             if writer2 != None:
                 await writer2.wait_closed()
-                writer2 = None
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -781,8 +790,8 @@ class yashmak():
             self.config['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
             self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
         else:
-            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': ['']
-                , 'doh_dns': [''], 'ip': '', 'port': ''}
+            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': [''],
+                       'doh_dns': [''], 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -817,19 +826,23 @@ class yashmak():
             self.dns_pool[x.encode('utf-8')] = data[x]
             self.dns_ttl[x.encode('utf-8')] = time.time() * 2
 
-    def UUID_detect(self, UUIDs):
+    @staticmethod
+    def UUID_detect(UUIDs):
         for x in UUIDs:
             if len(x) != 36:
                 raise Exception
         return UUIDs
 
-    def translate(self, content):
+    @staticmethod
+    def translate(content):
         return content.replace('\\', '/')
 
-    def encode(self, data):
+    @staticmethod
+    def encode(data):
         return data.encode('utf-8')
 
-    def get_today(self):
+    @staticmethod
+    def get_today():
         today = int(str(datetime.datetime.utcnow())[:10].replace('-', '')) ** 3
         return int(str(today)[today % 8:8] + str(today)[0:today % 8])
 
