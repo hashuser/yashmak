@@ -32,7 +32,7 @@ sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_op
 ![image](https://github.com/hashuser/yashmak/raw/master/recourse/2021-01-24%20131617.png)
 ## Yashmak项目思路
 * **不使用非必要的额外加密手段**
-  * 截止2020/04/15全球约85%[<sup>[Chrome浏览器统计数据]</sup>](https://transparencyreport.google.com/https)的站点使用了TLS/SSL，因此浏览器已对此部分流量进行了1次加密。考虑到可能存在的SNI阻断，以及20%的未使用加密的站点，Yashmak使用TLS1.3(X25519,AES_256_GCM)对所有流量实行了2次加密。不同于Shadowsocks或其他项目的是，Yashmak即不使用任何私有加密算法，也不会使用预共享密钥对流量使用对称加密算法进行加密。
+  * 截止2022/01/22全球约91%[<sup>[Chrome浏览器统计数据]</sup>](https://transparencyreport.google.com/https)的站点使用了TLS/SSL，因此浏览器已对此部分流量进行了1次加密。考虑到可能存在的SNI阻断，以及20%的未使用加密的站点，Yashmak使用TLS1.3(X25519,AES_256_GCM)对所有流量实行了2次加密。不同于Shadowsocks或其他项目的是，Yashmak即不使用任何私有加密算法，也不会使用预共享密钥对流量使用对称加密算法进行加密。
 * **不使用非必要的应用层协议**
   * Yashmak项目认为，在任何试图使用应用层协议包装流量的做法都是毫无意义的。由于已使用TLS1.3对所有流量进行2次加密，流量对于外部观察者而言是黑盒无法直接获取报文特征，任何基于报文内容的DPI全部失效，只能通过旁信道特征进行分析猜测(DNS请求，包长度，访问频率等)。鉴于传输的流量已具备正常的包长度特征，因此额外的应用层协议包装不能带来任何好处只会降低速度。
 * **不使用MUX(多路复用)**
