@@ -50,8 +50,8 @@ system_config(){
   echo "net.nf_conntrack_max=2000000" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_slow_start_after_idle=0" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_fin_timeout=30" >> /etc/sysctl.conf
-  echo "net.ipv4.tcp_rmem=4096 32768 6291456" >> /etc/sysctl.conf
-  echo "net.ipv4.tcp_wmem=4096 32768 6291456" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_rmem=4096 65536 12582912" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_wmem=4096 65536 12582912" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_mem =786432 1048576 26777216" >> /etc/sysctl.conf
   sysctl -p
   apt-get install resolvconf -y
