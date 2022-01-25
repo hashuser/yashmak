@@ -42,6 +42,7 @@ system_config(){
   echo "net.ipv4.tcp_keepalive_time=300" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_keepalive_intvl=5" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_keepalive_probes=3" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_moderate_rcvbuf=1" >> /etc/sysctl.conf
   echo "net.core.somaxconn=262114" >> /etc/sysctl.conf
   echo "net.ipv4.icmp_echo_ignore_all=1" >> /etc/sysctl.conf
   echo "net.ipv4.ip_default_ttl=128" >> /etc/sysctl.conf
