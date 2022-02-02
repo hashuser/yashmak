@@ -22,6 +22,10 @@ main(){
   make && sudo make install
   rm /usr/bin/python$python_main_version
   ln -s /usr/local/python-$python_version/bin/python$python_main_version /usr/bin/python$python_main_version
+  python3.9 -m pip install dnspython
+  python3.9 -m pip install uvloop
+  python3.9 -m pip install ntplib
+  python3.9 -m pip install psutil
   python$python_main_version -V
 }
 
