@@ -4,16 +4,16 @@ python_main_version="3.9"
 
 main(){
   apt-get update
-  apt-get install libreadline-gplv2-dev
-  apt-get install libncursesw5-dev
-  apt-get install libssl-dev
-  apt-get install libsqlite3-dev tk-dev
-  apt-get install libgdbm-dev
-  apt-get install libbz2-dev
-  apt-get install zlib1g-dev
-  apt-get install libffi-dev
-  apt-get install liblzma-dev
-  apt-get install gcc
+  apt-get install libreadline-gplv2-dev -y
+  apt-get install libncursesw5-dev -y
+  apt-get install libssl-dev -y
+  apt-get install libsqlite3-dev tk-dev -y
+  apt-get install libgdbm-dev -y
+  apt-get install libbz2-dev -y
+  apt-get install zlib1g-dev -y
+  apt-get install libffi-dev -y
+  apt-get install liblzma-dev -y
+  apt-get install gcc -y
   gcc --version
   wget https://www.python.org/ftp/python/$python_version/Python-$python_version.tgz
   tar zxf Python-$python_version.tgz
