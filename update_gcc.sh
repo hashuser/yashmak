@@ -11,7 +11,7 @@ main(){
   rm -rf gcc-build
   mkdir $path/gcc-build
   cd $path/gcc-build
-  $path/gcc-release-$gcc_version/configure --prefix=/usr/local/gcc-$gcc_version --enable-checking=release --enable-languages=c,c++
+  $path/gcc-releases-$gcc_version/configure --prefix=/usr/local/gcc-$gcc_version --enable-checking=release --enable-languages=c,c++
   make && sudo make install
   gcc --version
 }
