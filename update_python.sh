@@ -27,6 +27,7 @@ main(){
   python3.9 -m pip install ntplib
   python3.9 -m pip install psutil
   python$python_main_version -V
+  systemctl restart Yashmak
 }
 
 main
