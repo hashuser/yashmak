@@ -10,6 +10,7 @@ main(){
   apt-get install libmpc-dev -y
   apt-get install flex -y
   apt-get install gcc -y
+  apt-get install g++ -y
   gcc --version
   wget https://github.com/gcc-mirror/gcc/archive/refs/tags/releases/gcc-$gcc_version.tar.gz
   tar zxf gcc-$gcc_version.tar.gz
