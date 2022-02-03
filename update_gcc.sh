@@ -1,6 +1,7 @@
 #!/bin/bash
 gcc_version="11.2.0"
 path=$(cd "$(dirname "$0")";pwd)
+test="123456"
 
 main(){
   apt-get update
