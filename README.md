@@ -32,6 +32,10 @@ sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_op
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_python.sh | bash
 ```
+### GCC更新(Ubuntu 18.04TLS+)
+```
+sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
+```
 ## Yashmak服务端架构
 ![image](https://github.com/hashuser/yashmak/raw/master/recourse/2021-01-24%20131617.png)
 ## Yashmak项目思路
