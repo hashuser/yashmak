@@ -2,7 +2,7 @@
 gcc_version="11.2.0"
 path=$(cd "$(dirname "$0")";pwd)
 current_gcc_version=$(gcc -dumpversion)
-current_gpp_version=$(gcc -dumpversion)
+current_gpp_version=$(g++ -dumpversion)
 
 main(){
   if [[ $current_gcc_version > $gcc_version && $current_gpp_version > $gcc_version ]] || [[ $current_gcc_version == $gcc_version && $current_gpp_version == $gcc_version ]]
