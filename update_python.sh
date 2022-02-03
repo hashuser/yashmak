@@ -5,7 +5,7 @@ current_python_version=$(python$python_main_version -V)
 current_python_version=${current_python_version: 7}
 
 main(){
-if [ $current_python_version > $python_version ] || [ $current_python_version == $python_version ]
+if [[ $current_python_version > $python_version ]] || [[ $current_python_version == $python_version ]]
 then
         echo "Python is up to date"
 else
