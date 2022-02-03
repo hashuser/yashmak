@@ -4,6 +4,7 @@ path=$(cd "$(dirname "$0")";pwd)
 
 main(){
   apt-get update
+  apt-get install make -y
   apt-get install libgmp-dev -y
   apt-get install libmpfr-dev -y
   apt-get install libmpc-dev -y
