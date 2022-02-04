@@ -35,7 +35,7 @@ else
         python$python_main_version -V
         systemctl restart Yashmak
         rm -rf $path/Python-$python_version
-        rm -rf $path/Python-$python_version.tgz
+        rm -f $path/Python-$python_version.tgz
 fi
 }
 
