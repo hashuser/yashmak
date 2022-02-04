@@ -50,6 +50,7 @@ main(){
           update-alternatives --install /usr/bin/g++ g++ /usr/bin/gcc-$gcc_version/bin/g++ 50
           rm -rf gcc-build
           rm -rf gcc-releases-gcc-$gcc_version
+          rm -f gcc-$gcc_version.tar.gz
 fi
 }
 
