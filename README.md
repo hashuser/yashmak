@@ -24,6 +24,9 @@ sudo Yashmak_uninstall
 ```
 sudo systemctl restart Yashmak
 ```
+
+## 如无法获取最新版本GCC/G++，将先编译GCC/G++，以下更新可能会耗费较长时间
+
 ### OpenSSL更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_openssl.sh | bash
