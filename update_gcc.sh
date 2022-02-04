@@ -31,7 +31,7 @@ main(){
           mkdir $path/gcc-build
           cd $path/gcc-build
           $path/gcc-releases-gcc-$gcc_version/configure --prefix=/usr/local/gcc-$gcc_version --enable-checking=release --enable-languages=c,c++ --disable-multilib
-          make && sudo make install
+          make -j $cpu_count && make install
           gcc --version
           update-alternatives --remove gcc /usr/bin/gcc-$gcc_version/bin/gcc
           update-alternatives --remove g++ /usr/bin/gcc-$gcc_version/bin/g++
