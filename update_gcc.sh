@@ -9,6 +9,32 @@ then
         cpu_count="1"
 fi
 
+array0=(${gcc_version//./ })
+array1=(${current_gcc_version//./ })
+
+if [[ $((${array0[0]})) -gt $((${array1[0]})) ]]
+then
+        echo "update required $((${array0[0]})) $((${array1[0]}))"
+elif [[ $((${array0[0]})) -eq $((${array1[0]})) ]]
+then
+        if [[ $((${array0[1]})) -gt $((${array1[1]})) ]]
+        then
+                echo "update required $((${array0[1]})) $((${array1[1]}))"
+        elif [[ $((${array0[1]})) -eq $((${array1[1]})) ]]
+        then
+                if [[ $((${array0[2]})) -gt $((${array1[2]})) ]]
+                then
+                        echo "update required"
+                else
+                        echo "up to date"
+                fi
+        else
+                echo "up to date"
+        fi
+else
+        echo "up to date"
+fi
+
 main(){
   if [[ $current_gcc_version > $gcc_version && $current_gpp_version > $gcc_version ]] || [[ $current_gcc_version == $gcc_version && $current_gpp_version == $gcc_version ]]
   then
