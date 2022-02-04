@@ -1,5 +1,10 @@
 #!/bin/bash
 path=$(cd "$(dirname "$0")";pwd)
+cpu_count=$(( $(cat /proc/cpuinfo |grep "processor"|wc -l) - 1 ))
+if [[ $cpu_count < "1" ]]
+then
+        cpu_count="1"
+fi
 
 main(){
   curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
@@ -8,8 +13,7 @@ main(){
   tar xzvf OpenSSL_1_1_1l.tar.gz
   cd $path/openssl-OpenSSL_1_1_1l
   ./config
-  make
-  make install
+  make -j $cpu_count && make install
   echo "/usr/local/lib" > /etc/ld.so.conf.d/libc.conf
   echo "/usr/lib" >> /etc/ld.so.conf.d/libc.conf
   echo "ca_certificate=/etc/ssl/certs/ca-certificates.crt" > /etc/wgetrc
