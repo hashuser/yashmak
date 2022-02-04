@@ -29,26 +29,26 @@ install_gcc(){
   $path/gcc-releases-gcc-$gcc_version/configure --prefix=/usr/local/gcc-$gcc_version --enable-checking=release --enable-languages=c,c++ --disable-multilib
   make -j $cpu_count && make install
   gcc --version
-  update-alternatives --remove gcc /usr/bin/gcc-$gcc_version/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-$gcc_version/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-11.1.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-11.1.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-10.3.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-10.3.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-10.2.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-10.2.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-10.1.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-10.1.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-9.4.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-9.4.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-9.3.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-9.3.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-9.2.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-9.2.0/bin/g++
-  update-alternatives --remove gcc /usr/bin/gcc-9.1.0/bin/gcc
-  update-alternatives --remove g++ /usr/bin/gcc-9.1.0/bin/g++
-  update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-$gcc_version/bin/gcc 50
-  update-alternatives --install /usr/bin/g++ g++ /usr/bin/gcc-$gcc_version/bin/g++ 50
+  update-alternatives --remove gcc /usr/local/gcc-$gcc_version/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-$gcc_version/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-11.1.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-11.1.0/bin/g++
+  update-alternatives --remove gcc /usr/lcoal/gcc-10.3.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-10.3.0/bin/g++
+  update-alternatives --remove gcc /usr/lcoal/gcc-10.2.0/bin/gcc
+  update-alternatives --remove g++ /usr/lcoal/gcc-10.2.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-10.1.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-10.1.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-9.4.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-9.4.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-9.3.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-9.3.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-9.2.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-9.2.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-9.1.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-9.1.0/bin/g++
+  update-alternatives --install /usr/bin/gcc gcc /usr/local/gcc-$gcc_version/bin/gcc 50
+  update-alternatives --install /usr/bin/g++ g++ /usr/local/gcc-$gcc_version/bin/g++ 50
   rm -rf $path/gcc-build
   rm -rf $path/gcc-releases-gcc-$gcc_version
   rm -f $path/gcc-$gcc_version.tar.gz
