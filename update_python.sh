@@ -1,4 +1,5 @@
 #!/bin/bash
+path=$(cd "$(dirname "$0")";pwd)
 python_version="3.9.10"
 python_main_version="3.9"
 current_python_version=$(python$python_main_version -V)
@@ -22,7 +23,7 @@ else
         curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
         wget https://www.python.org/ftp/python/$python_version/Python-$python_version.tgz
         tar zxf Python-$python_version.tgz
-        cd Python-$python_version
+        cd $path/Python-$python_version
         ./configure --prefix=/usr/local/python-$python_version --enable-optimizations
         make && sudo make install
         rm /usr/bin/python$python_main_version
@@ -33,6 +34,8 @@ else
         python3.9 -m pip install psutil
         python$python_main_version -V
         systemctl restart Yashmak
+        rm -rf $path/Python-$python_version
+        rm -rf $path/Python-$python_version.tgz
 fi
 }
 
