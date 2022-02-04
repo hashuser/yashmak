@@ -25,7 +25,7 @@ else
         apt-get install zlib1g-dev -y
         apt-get install libffi-dev -y
         apt-get install liblzma-dev -y
-        curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
+        sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
         wget https://www.python.org/ftp/python/$python_version/Python-$python_version.tgz
         tar zxf Python-$python_version.tgz
         cd $path/Python-$python_version
