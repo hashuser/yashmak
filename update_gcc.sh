@@ -3,6 +3,11 @@ gcc_version="11.2.0"
 path=$(cd "$(dirname "$0")";pwd)
 current_gcc_version=$(gcc -dumpversion)
 current_gpp_version=$(g++ -dumpversion)
+cpu_count=$(( $(cat /proc/cpuinfo |grep "processor"|wc -l) - 1 ))
+if [[ $cpu_count < "1" ]]
+then
+        cpu_count="1"
+fi
 
 main(){
   if [[ $current_gcc_version > $gcc_version && $current_gpp_version > $gcc_version ]] || [[ $current_gcc_version == $gcc_version && $current_gpp_version == $gcc_version ]]
