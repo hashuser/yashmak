@@ -1,4 +1,6 @@
 #!/bin/bash
+python_main_version="3.10"
+
 create_service(){
   touch $(cd "$(dirname "$0")";pwd)/Yashmak.service
   cat>$(cd "$(dirname "$0")";pwd)/Yashmak.service<<EOF
@@ -11,7 +13,7 @@ create_service(){
   User=root
   Group=root
   WorkingDirectory=$(cd "$(dirname "$0")";pwd)
-  ExecStart=/usr/bin/python3.9 $(cd "$(dirname "$0")";pwd)/server.py
+  ExecStart=/usr/bin/python$python_main_version $(cd "$(dirname "$0")";pwd)/server.py
   LimitNOFILE=1048575
   Restart=always
   TasksMax=infinity
@@ -126,13 +128,13 @@ install_Yashmak(){
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
-  apt-get install python3.9 -y
+  apt-get install python$python_main_version -y
   apt-get install python3-pip -y
   apt-get install python3-distutils -y
-  python3.9 -m pip install dnspython
-  python3.9 -m pip install uvloop
-  python3.9 -m pip install ntplib
-  python3.9 -m pip install psutil
+  python$python_main_version -m pip install dnspython
+  python$python_main_version -m pip install uvloop
+  python$python_main_version -m pip install ntplib
+  python$python_main_version -m pip install psutil
   wget -O server.py https://raw.githubusercontent.com/hashuser/yashmak/master/server.py
   wget -O geoip.json https://raw.githubusercontent.com/hashuser/yashmak/master/geoip.json
   wget -O blacklist.json https://raw.githubusercontent.com/hashuser/yashmak/master/blacklist.json
