@@ -1,4 +1,4 @@
-from PyQt5 import QtWidgets, QtGui, QtCore
+from PyQt6 import QtWidgets, QtGui, QtCore
 from dns import message
 import base64
 import asyncio
@@ -24,49 +24,49 @@ gc.set_threshold(100000, 50, 50)
 
 
 class yashmak_core():
-    def __init__(self):
+    def __init__(self, config, ID):
         try:
-            self.init()
+            self.init(config, ID)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    def init(self):
+    def init(self, config, ID):
+        self.config = config
+        self.ID = ID
+        self.white_list = self.config['white_list']
+        self.black_list = self.config['black_list']
+        self.HSTS_list = self.config['HSTS_list']
+        self.geoip_list = self.config['geoip_list']
+        self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
         self.proxy_context = self.get_proxy_context()
-        self.normal_context = self.get_normal_context()
         self.connection_pool = []
         self.connection_count = 0
         self.dns_pool = dict()
         self.dns_ttl = dict()
-        self.ipv4 = True
-        self.ipv6 = True
         self.main_port_fail = 0
-        self.backup(self.config['white_list'], 'old.json')
         self.set_priority()
         self.create_loop()
 
     def create_server(self):
         if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
+            listener = socket.create_server(address=('::1', self.config['worker_port'][self.ID]), family=socket.AF_INET6,
                                             dualstack_ipv6=True)
         else:
-            listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
+            listener = socket.create_server(address=('127.0.0.1', self.config['worker_port'][self.ID]), family=socket.AF_INET,
                                             dualstack_ipv6=False)
+        #print(listener)
         return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
 
     def create_loop(self):
-        self.loop = asyncio.get_event_loop()
+        self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.create_server())
-        # self.loop.create_task(self.TCP_ping())
         self.loop.create_task(self.pool())
         self.loop.create_task(self.pool_health())
         self.loop.create_task(self.white_list_updater())
-        self.loop.create_task(self.yashmak_updater())
         self.loop.create_task(self.clear_cache())
         self.loop.create_task(self.check_parent())
-        self.loop.create_task(self.ipv4_test())
-        self.loop.create_task(self.ipv6_test())
         self.loop.run_forever()
 
     @staticmethod
@@ -113,7 +113,6 @@ class yashmak_core():
                 if scan:
                     instruction = data[:4]
                     if b'GET' in instruction or b'POST' in instruction:
-                        #URL, host, port = self.get_http_address_new(data, 1, False)
                         data = self.get_response(data)
                 writer.write(data)
                 await writer.drain()
@@ -152,6 +151,7 @@ class yashmak_core():
             done, pending = await asyncio.wait(await self.make_switches(client_reader, client_writer, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
+            await self.clean_up(client_writer, server_writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -186,7 +186,7 @@ class yashmak_core():
     async def get_IPs(self,type,host,client_writer):
         if not type:
             try:
-                IPs = await self.auto_resolve(host)
+                IPs = await self.resolve(host)
             except Exception:
                 await self.http_response(client_writer, 502)
                 raise Exception('No IP Error')
@@ -251,8 +251,17 @@ class yashmak_core():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
+    def get_proxy_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_verify_locations(self.config_path + self.config['cert'])
+        return context
+
     async def pool(self):
-        self.pool_max_size = 16
+        self.pool_max_size = 4
         self.is_checking = 0
         self.is_connecting = 0
         if self.config['mode'] == 'direct':
@@ -287,7 +296,7 @@ class yashmak_core():
             ports = [self.get_calculated_port()]
         for port in ports:
             try:
-                for IP in (await self.auto_resolve(self.config['host'].encode('utf-8'))):
+                for IP in (await self.resolve(self.config['host'].encode('utf-8'))):
                     server_reader, server_writer = await asyncio.open_connection(host=IP,
                                                                                  port=port,
                                                                                  ssl=self.proxy_context,
@@ -300,7 +309,6 @@ class yashmak_core():
                 if port == self.config['port'] and (await self.has_internet()):
                     self.main_port_fail += 1
         if server_reader == None or server_writer == None:
-            #self.update_yashmak()
             raise Exception
 
     async def pool_health(self):
@@ -351,94 +359,36 @@ class yashmak_core():
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
-    async def network_detector_worker(self,address):
-        s = None
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            await self.loop.sock_connect(s, address)
-            await self.clean_up(s)
-            return 1
-        except Exception:
-            await self.clean_up(s)
-            return 0
-
     async def has_internet(self):
-        DNS_IPs = ['114.114.114.114', '223.5.5.5', '119.29.29.29', '180.76.76.76', '1.2.4.8', '8.8.8.8', '1.1.1.1']
-        tasks = []
-        status = False
-        for x in DNS_IPs:
-            tasks.append(asyncio.create_task(self.network_detector_worker((x, 53))))
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for x in done:
-            status += x.result()
-        for x in pending:
-            x.cancel()
-        if status:
-            return True
-        return False
-
-    async def yashmak_updater(self):
-        S = time.time()
-        while 1:
-            if time.time() - S > 7200:
-                self.update_yashmak()
-                S = time.time()
-            await asyncio.sleep(300)
-
-    def update_yashmak(self):
+        server_writer = None
         try:
-            if not os.path.exists(self.config_path + 'download.json'):
-                win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+            if socket.has_dualstack_ipv6():
+                localhost = '::1'
+            else:
+                localhost = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
+            server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
+            await server_writer.drain()
+            result = await server_reader.read(64)
+            await self.clean_up(server_writer)
+            if result == b'True':
+                return True
+            else:
+                return False
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+            await self.clean_up(server_writer)
 
     async def white_list_updater(self):
-        while 1:
-            server_writer = None
+        while True:
             try:
-                file = None
-                server_reader, server_writer = await self.connect_proxy_server()
-                server_writer.write(self.config['uuid'])
-                await server_writer.drain()
-                server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
-                await server_writer.drain()
-                customize = b''
-                while 1:
-                    data = await server_reader.read(8192)
-                    if data == b'' or data == b'\n':
-                        break
-                    customize += data
-                if os.path.exists(self.config['white_list']) and customize != b'':
-                    with open(self.config['white_list'], 'r') as file:
-                        data = json.load(file)
-                    customize = json.loads(gzip.decompress(customize))
-                    data += customize
-                    for x in list(map(self.encode, customize)):
-                        self.white_list.add(x.replace(b'*', b''))
-                    data = list(set(data))
-                    self.backup(self.config['white_list'],'chinalist.json')
-                    await asyncio.sleep(1)
-                    with open(self.config['white_list'], 'w') as file:
-                        json.dump(data, file)
-                elif customize != b'':
-                    self.backup(self.config['white_list'],'chinalist.json')
-                    await asyncio.sleep(1)
-                    with open(self.config['white_list'], 'wb') as file:
-                        file.write(customize)
-                await self.clean_up(server_writer, file)
+                if self.config['pipes'][self.ID][0].poll():
+                    self.white_list = self.white_list.union(self.config['pipes'][self.ID][0].recv())
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer)
             await asyncio.sleep(60)
-
-    @staticmethod
-    def backup(path,filename):
-        os.makedirs(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup', exist_ok=True)
-        with open(path,'rb') as ofile:
-            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'wb') as bkfile:
-                bkfile.write(ofile.read())
 
     def exception_handler(self, loop, context):
         pass
@@ -583,6 +533,208 @@ class yashmak_core():
             error.__traceback__ = None
         return False
 
+    def is_china_ip(self, ip):
+        ip = ip.replace(b'::ffff:',b'',1)
+        ip = int(ipaddress.ip_address(ip.decode('utf-8')))
+        left = 0
+        right = len(self.geoip_list) - 1
+        while left <= right:
+            mid = left + (right - left) // 2
+            if self.geoip_list[mid][0] <= ip <= self.geoip_list[mid][1]:
+                return True
+            elif self.geoip_list[mid][1] < ip:
+                left = mid + 1
+            elif self.geoip_list[mid][0] > ip:
+                right = mid - 1
+        return False
+
+    async def resolve(self,host):
+        if self.is_ip(host):
+            host = host.replace(b'::ffff:',b'')
+            return [host]
+        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+            return self.dns_pool[host]
+        return await self.query(host)
+
+    async def query(self,host):
+        result = await self.query_worker(host)
+        if result == None:
+            raise Exception
+        else:
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
+        return result
+
+    async def query_worker(self, host):
+        server_writer = None
+        try:
+            if socket.has_dualstack_ipv6():
+                localhost = '::1'
+            else:
+                localhost = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
+            server_writer.write(host)
+            await server_writer.drain()
+            result = (await server_reader.read(65535)).split(b',')
+            await self.clean_up(server_writer)
+            return result
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer)
+
+    async def clear_cache(self):
+        while 1:
+            try:
+                for x in list(self.dns_pool.keys()):
+                    if (time.time() - self.dns_ttl[x]) > 600:
+                        del self.dns_pool[x]
+                        del self.dns_ttl[x]
+                for x in range(600):
+                    S = time.time()
+                    await asyncio.sleep(0.5)
+                    E = time.time()
+                    if E - S > 1.5:
+                        break
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+
+    @staticmethod
+    async def check_parent():
+        ppid = os.getppid()
+        while 1:
+            if ppid not in psutil.pids():
+                sys.exit(0)
+            await asyncio.sleep(20)
+
+    @staticmethod
+    def get_today():
+        today = int(str(datetime.datetime.utcnow())[:10].replace('-', '')) ** 3
+        return int(str(today)[today % 8:8] + str(today)[0:today % 8])
+
+    def get_calculated_port(self):
+        return 1024 + self.get_today() % 8976
+
+
+class yashmak_dns():
+    def __init__(self, config):
+        try:
+            self.init(config)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def init(self, config):
+        self.config = config
+        self.normal_context = self.get_normal_context()
+        self.dns_pool = dict()
+        self.dns_ttl = dict()
+        self.ipv4 = True
+        self.ipv6 = True
+        self.set_priority()
+        self.create_loop()
+
+    def create_server(self):
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=('::1', self.config['dns_port']), family=socket.AF_INET6,
+                                            dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=('127.0.0.1', self.config['dns_port']), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+
+    async def handler(self, client_reader, client_writer):
+        try:
+            host = await asyncio.wait_for(client_reader.read(65535), 20)
+            if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
+                client_writer.write(str(await self.auto_resolve(host)).encode('utf-8')[3:-2].replace(b"b'",b"").replace(b"'",b"").replace(b" ",b""))
+            else:
+                client_writer.write(str(await self.has_internet()).encode('utf-8'))
+            await client_writer.drain()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(client_writer)
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.create_server())
+        self.loop.create_task(self.has_internet())
+        self.loop.run_forever()
+
+    @staticmethod
+    def set_priority():
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+
+    @staticmethod
+    def get_normal_context():
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_default_certs()
+        return context
+
+    async def network_detector_worker(self,address):
+        server_writer = None
+        try:
+            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address[0], port=address[1]),5)
+            await self.clean_up(server_writer)
+            return 1
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer)
+            return 0
+
+    async def network_detector(self,addresses):
+        tasks = []
+        status = False
+        for address in addresses:
+            tasks.append(asyncio.create_task(self.network_detector_worker(address)))
+        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for x in done:
+            status += x.result()
+        for x in pending:
+            x.cancel()
+        if status:
+            return True
+        return False
+
+    async def has_ipv4(self):
+        tasks = [('114.114.114.114',53), ('119.29.29.29',53),('ipv4.testipv6.cn',443), ('ipv4.lookup.test-ipv6.com',443),
+                 ('ipv4.test-ipv6.hkg.vr.org',443)]
+        self.ipv4 = await self.network_detector(tasks)
+        return self.ipv4
+
+    async def has_ipv6(self):
+        tasks = [('2400:3200:baba::1',53), ('2402:4e00::',53), ('ipv6.testipv6.cn',443), ('ipv6.lookup.test-ipv6.com',443),
+                 ('ipv6.test-ipv6.hkg.vr.org',443)]
+        self.ipv6 = await self.network_detector(tasks)
+        return self.ipv6
+
+    async def has_internet(self):
+        await self.has_ipv4()
+        await self.has_ipv6()
+        if not self.ipv4 and not self.ipv6:
+            return False
+        else:
+            return True
+
+    @staticmethod
+    def is_ip(host):
+        try:
+            if b':' in host or int(host[host.rfind(b'.') + 1:]):
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
     @staticmethod
     def is_ipv6(ip):
         try:
@@ -592,76 +744,6 @@ class yashmak_core():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         return False
-
-    def is_china_ip(self, ip):
-        ip = ip.replace(b'::ffff:',b'',1)
-        ip = int(ipaddress.ip_address(ip.decode('utf-8')))
-        left = 0
-        right = len(self.geoip_list) - 1
-        while left <= right:
-            mid = left + (right - left) // 2
-            if self.geoip_list[mid][0] <= ip and ip <= self.geoip_list[mid][1]:
-                return True
-            elif self.geoip_list[mid][1] < ip:
-                left = mid + 1
-            elif self.geoip_list[mid][0] > ip:
-                right = mid - 1
-        return False
-
-    def get_proxy_context(self):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
-        context.set_alpn_protocols(['h2', 'http/1.1'])
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.check_hostname = True
-        context.load_verify_locations(self.config_path + self.config['cert'])
-        return context
-
-    @staticmethod
-    def get_normal_context():
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.set_alpn_protocols(['http/1.1'])
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.check_hostname = True
-        context.load_default_certs()
-        return context
-
-    async def ipv4_test(self):
-        tasks = [('114.114.114.114',53), ('119.29.29.29',53),('ipv4.testipv6.cn',443), ('ipv4.lookup.test-ipv6.com',443),
-                 ('ipv4.test-ipv6.hkg.vr.org',443)]
-        fail = 0
-        for task in tasks:
-            server_writer = None
-            try:
-                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer)
-                break
-            except Exception as error:
-                fail += 1
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-                await self.clean_up(server_writer)
-        if fail >= len(tasks):
-            self.ipv6 = False
-
-    async def ipv6_test(self):
-        tasks = [('2400:3200:baba::1',53), ('2402:4e00::',53), ('ipv6.testipv6.cn',443), ('ipv6.lookup.test-ipv6.com',443),
-                 ('ipv6.test-ipv6.hkg.vr.org',443)]
-        fail = 0
-        for task in tasks:
-            server_writer = None
-            try:
-                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer)
-                break
-            except Exception as error:
-                fail += 1
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-                await self.clean_up(server_writer)
-        if fail >= len(tasks):
-            self.ipv6 = False
 
     async def auto_resolve(self,host):
         if self.ipv4 and self.ipv6:
@@ -801,40 +883,268 @@ class yashmak_core():
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
 
-    @staticmethod
-    async def check_parent():
-        ppid = os.getppid()
-        while 1:
-            if ppid not in psutil.pids():
-                sys.exit(0)
-            await asyncio.sleep(10)
+    def exception_handler(self, loop, context):
+        pass
 
-    async def TCP_ping(self):
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
+        try:
+            if writer1 != None:
+                writer1.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                writer2.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+
+class yashmak_log():
+    def __init__(self, config):
+        try:
+            self.init(config)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def init(self, config):
+        self.config = config
+        self.white_list = self.config['white_list']
+        self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
+        self.proxy_context = self.get_proxy_context()
+        self.backup(self.config['white_list_path'], 'old.json')
+        self.dns_pool = dict()
+        self.dns_ttl = dict()
+        self.main_port_fail = 0
+        self.set_priority()
+        self.create_loop()
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.white_list_updater())
+        self.loop.run_forever()
+
+    @staticmethod
+    def set_priority():
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+
+    async def connect_proxy_server(self):
+        server_reader, server_writer = None, None
+        if self.main_port_fail <= 100:
+            ports = [self.config['port'], self.get_calculated_port()]
+        else:
+            ports = [self.get_calculated_port()]
+        for port in ports:
+            try:
+                for IP in (await self.resolve(self.config['host'].encode('utf-8'))):
+                    server_reader, server_writer = await asyncio.open_connection(host=IP,
+                                                                                 port=port,
+                                                                                 ssl=self.proxy_context,
+                                                                                 server_hostname=self.config['host'],
+                                                                                 ssl_handshake_timeout=5)
+                    return server_reader, server_writer
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                if port == self.config['port'] and (await self.has_internet()):
+                    self.main_port_fail += 1
+        if server_reader == None or server_writer == None:
+            raise Exception
+
+    async def has_internet(self):
         server_writer = None
         try:
-            t_t = 0
-            t_c = 0
-            while 1:
-                server_reader, server_writer = await self.connect_proxy_server()
-                server_writer.write(self.config['uuid'])
-                await server_writer.drain()
-                server_writer.write(int.to_bytes(-2, 2, 'big', signed=True))
-                await server_writer.drain()
-                s_t = time.perf_counter_ns()
-                server_writer.write(int.to_bytes(s_t, 8, 'big', signed=True))
-                await server_writer.drain()
-                await asyncio.wait_for(server_reader.read(8), 20)
-                r_t = time.perf_counter_ns()
-                t_t += (r_t - s_t) / 1000000
-                t_c += 1
-                print('This Ping:',round((r_t - s_t) / 1000000, 1), 'ms   Avarage:',round(t_t / t_c, 1),'ms')
-                await asyncio.sleep(1)
+            if socket.has_dualstack_ipv6():
+                localhost = '::1'
+            else:
+                localhost = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
+            server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
+            await server_writer.drain()
+            result = await server_reader.read(64)
+            await self.clean_up(server_writer)
+            if result == b'True':
+                return True
+            else:
+                return False
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(server_writer)
-        finally:
+
+    def get_proxy_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_verify_locations(self.config_path + self.config['cert'])
+        return context
+
+    async def white_list_updater(self):
+        while True:
+            try:
+                self.white_list_old = self.white_list.copy()
+                customize = await self.white_list_update_worker()
+                if customize:
+                    if os.path.exists(self.config['white_list_path']):
+                        with open(self.config['white_list_path'], 'r') as file:
+                            data = json.load(file)
+                    else:
+                        data = []
+                    customize = json.loads(gzip.decompress(customize))
+                    data += customize
+                    for x in list(map(self.encode, customize)):
+                        self.white_list.add(x.replace(b'*', b''))
+                    data = list(set(data))
+                    self.backup(self.config['white_list_path'],'chinalist.json')
+                    await asyncio.sleep(1)
+                    with open(self.config['white_list_path'], 'w') as file:
+                        json.dump(data, file)
+                    self.push_white_list()
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            await asyncio.sleep(60)
+
+    async def white_list_update_worker(self):
+        server_writer = None
+        try:
+            server_reader, server_writer = await self.connect_proxy_server()
+            server_writer.write(self.config['uuid'])
+            await server_writer.drain()
+            server_writer.write(int.to_bytes(-3, 2, 'big', signed=True))
+            await server_writer.drain()
+            customize = b''
+            while True:
+                data = await server_reader.read(16384)
+                if data == b'' or data == b'\n':
+                    break
+                customize += data
             await self.clean_up(server_writer)
+            return customize
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer)
+
+    @staticmethod
+    def backup(path,filename):
+        os.makedirs(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup', exist_ok=True)
+        with open(path,'rb') as ofile:
+            with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/Backup/' + filename, 'wb') as bkfile:
+                bkfile.write(ofile.read())
+
+    def push_white_list(self):
+        difference = self.white_list.symmetric_difference(self.white_list_old)
+        for x in self.config['pipes'].keys():
+            self.config['pipes'][x][1].send(difference)
+
+    @staticmethod
+    def is_ip(host):
+        try:
+            if b':' in host or int(host[host.rfind(b'.') + 1:]):
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
+    async def resolve(self,host):
+        if self.is_ip(host):
+            host = host.replace(b'::ffff:',b'')
+            return [host]
+        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+            return self.dns_pool[host]
+        return await self.query(host)
+
+    async def query(self,host):
+        result = await self.query_worker(host)
+        if result == None:
+            raise Exception
+        else:
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time()
+        return result
+
+    async def query_worker(self, host):
+        server_writer = None
+        try:
+            if socket.has_dualstack_ipv6():
+                localhost = '::1'
+            else:
+                localhost = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
+            server_writer.write(host)
+            await server_writer.drain()
+            result = (await server_reader.read(65535)).split(b',')
+            await self.clean_up(server_writer)
+            return result
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer)
+
+    async def clear_cache(self):
+        while 1:
+            try:
+                for x in list(self.dns_pool.keys()):
+                    if (time.time() - self.dns_ttl[x]) > 600:
+                        del self.dns_pool[x]
+                        del self.dns_ttl[x]
+                for x in range(600):
+                    S = time.time()
+                    await asyncio.sleep(0.5)
+                    E = time.time()
+                    if E - S > 1.5:
+                        break
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
+        try:
+            if writer1 != None:
+                writer1.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                writer2.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     @staticmethod
     def get_today():
@@ -844,23 +1154,154 @@ class yashmak_core():
     def get_calculated_port(self):
         return 1024 + self.get_today() % 8976
 
+    @staticmethod
+    def encode(data):
+        return data.encode('utf-8')
 
-class yashmak(yashmak_core):
-    def __init__(self):
-        self.white_list = set()
-        self.black_list = set()
-        self.HSTS_list = set()
-        self.geoip_list = []
-        self.load_config()
-        self.set_proxy()
-        self.load_exception_list()
-        self.write_pid()
+    def exception_handler(self, loop, context):
+        pass
+
+
+class yashmak_load_balancer():
+    def __init__(self, config):
         try:
-            win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+            self.init(config)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-        yashmak_core.__init__(self)
+
+    def init(self, config):
+        self.config = config
+        self.set_priority()
+        self.create_loop()
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.create_server())
+        self.loop.run_forever()
+
+    @staticmethod
+    def set_priority():
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+
+    def create_server(self):
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
+                                            dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+
+    async def handler(self, client_reader, client_writer):
+        server_writer = None
+        try:
+            if socket.has_dualstack_ipv6():
+                host = '::1'
+            else:
+                host = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=host, port=self.config['worker_port'][random.randint(0,self.config['worker']-1)])
+            done, pending = await asyncio.wait([asyncio.create_task(self.switch(client_reader,server_writer)),asyncio.create_task(self.switch(server_reader,client_writer))],return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+            await self.clean_up(client_writer, server_writer)
+        except Exception as error:
+            print(error)
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(client_writer,server_writer)
+
+    async def switch(self, reader, writer):
+        try:
+            while True:
+                data = await reader.read(16384)
+                if data == b'':
+                    raise Exception
+                writer.write(data)
+                await writer.drain()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(writer)
+
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
+        try:
+            if writer1 != None:
+                writer1.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                writer2.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def exception_handler(self, loop, context):
+        pass
+
+
+class yashmak_daemon():
+    def __init__(self, command):
+        try:
+            self.init(command)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def init(self, command):
+        self.command = command
+        self.service = []
+        self.load_config()
+        self.load_exception_list()
+        self.create_pipes()
+        self.find_ports()
+        self.write_pid()
+        self.run_service()
+        self.set_priority()
+        self.create_loop()
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.yashmak_updater())
+        self.loop.create_task(self.accept_command())
+        self.loop.run_forever()
+
+    @staticmethod
+    def set_priority():
+        p = psutil.Process(os.getpid())
+        p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+
+    def run_service(self):
+        self.service.append(multiprocessing.Process(target=yashmak_dns,args=(self.config,)))
+        self.service.append(multiprocessing.Process(target=yashmak_log, args=(self.config,)))
+        self.service.append(multiprocessing.Process(target=yashmak_load_balancer, args=(self.config,)))
+        for x in range(self.config['worker']):
+            self.service.append(multiprocessing.Process(target=yashmak_core,args=(self.config,x,)))
+        #print(len(self.service))
+        for x in self.service:
+            x.start()
+
+    def terminate_service(self):
+        for x in self.service:
+            x.kill()
 
     def load_config(self):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
@@ -871,18 +1312,19 @@ class yashmak(yashmak_core):
             self.config = json.loads(content)
             self.config[self.config['active']]['startup'] = self.config['startup']
             self.config[self.config['active']]['mode'] = self.config['mode']
-            self.config[self.config['active']]['white_list'] = self.config_path + self.config['white_list']
-            self.config[self.config['active']]['black_list'] = self.config_path + self.config['black_list']
-            self.config[self.config['active']]['HSTS_list'] = self.config_path + self.config['HSTS_list']
-            self.config[self.config['active']]['geoip_list'] = self.config_path + self.config['geoip_list']
+            self.config[self.config['active']]['white_list_path'] = self.config_path + self.config['white_list']
+            self.config[self.config['active']]['black_list_path'] = self.config_path + self.config['black_list']
+            self.config[self.config['active']]['HSTS_list_path'] = self.config_path + self.config['HSTS_list']
+            self.config[self.config['active']]['geoip_list_path'] = self.config_path + self.config['geoip_list']
             self.config[self.config['active']]['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
             self.config[self.config['active']]['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
+            self.config[self.config['active']]['worker'] = (lambda x: os.cpu_count() if x > os.cpu_count() else x)(int(self.config['worker']))
             self.config = self.config[self.config['active']]
             self.config['uuid'] = self.config['uuid'].encode('utf-8')
             self.config['listen'] = int(self.config['listen'])
         else:
             example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
-                       'normal_dns': [''], 'doh_dns': [''], 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
+                       'normal_dns': [''], 'doh_dns': [''], 'worker': '', 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
@@ -895,58 +1337,91 @@ class yashmak(yashmak_core):
                 for x in data:
                     var.add(x.replace(b'*', b''))
 
-        load_list(self.config['white_list'], self.white_list, self.encode)
-        load_list(self.config['black_list'], self.black_list, self.encode)
-        load_list(self.config['HSTS_list'], self.HSTS_list, self.encode)
-        with open(self.config['geoip_list'], 'r') as file:
+        self.white_list = set()
+        self.black_list = set()
+        self.HSTS_list = set()
+        self.geoip_list = []
+        load_list(self.config['white_list_path'], self.white_list, self.encode)
+        load_list(self.config['black_list_path'], self.black_list, self.encode)
+        load_list(self.config['HSTS_list_path'], self.HSTS_list, self.encode)
+        with open(self.config['geoip_list_path'], 'r') as file:
             data = json.load(file)
         for x in data:
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
+        self.config['white_list'] = self.white_list
+        self.config['black_list'] = self.black_list
+        self.config['HSTS_list'] = self.HSTS_list
+        self.config['geoip_list'] = self.geoip_list
 
-    def set_proxy(self):
-        platform = sys.platform
-        if platform == 'win32':
-            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
-            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Environment',0, winreg.KEY_ALL_ACCESS)
+    def create_pipes(self):
+        self.config['pipes'] = dict()
+        for x in range(self.config['worker']):
+            self.config['pipes'][x] = (multiprocessing.Pipe(False))
 
-            def set_key(root, name, value):
-                try:
-                    _, reg_type = winreg.QueryValueEx(root, name)
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
-                except Exception:
-                    if isinstance(value, str):
-                        reg_type = 1
-                    elif isinstance(value, int):
-                        reg_type = 4
-                    else:
-                        raise Exception
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
-
-            set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
-            set_key(INTERNET_SETTINGS, 'ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
-            set_key(INTERNET_SETTINGS, 'ProxyServer', 'http://127.0.0.1:' + str(self.config['listen']))
-            set_key(ENVIRONMENT_SETTING, 'HTTP_PROXY', 'http://127.0.0.1:' + str(self.config['listen']))
-            set_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY', 'http://127.0.0.1:' + str(self.config['listen']))
-            internet_set_option = ctypes.windll.wininet.InternetSetOptionW
-            internet_set_option(0, 37, 0, 0)
-            internet_set_option(0, 39, 0, 0)
-        elif platform == 'darwin':
-            os.popen('''networksetup -setwebproxystate "Wi-Fi" on''')
-            os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" on''')
-            os.popen('''networksetup -setwebproxy "Wi-Fi" 127.0.0.1 '''+str(self.config['listen']))
-            os.popen('''networksetup -setsecurewebproxy "Wi-Fi" 127.0.0.1 '''+str(self.config['listen']))
-            os.popen('''networksetup -setproxybypassdomains "Wi-Fi" localhost 127.* 10.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 172.32.* 192.168.*''')
-            os.popen('''networksetup -setwebproxystate "Ethernet" on''')
-            os.popen('''networksetup -setsecurewebproxystate "Ethernet" on''')
-            os.popen('''networksetup -setwebproxy "Ethernet" 127.0.0.1 '''+str(self.config['listen']))
-            os.popen('''networksetup -setsecurewebproxy "Ethernet" 127.0.0.1 '''+str(self.config['listen']))
-            os.popen('''networksetup -setproxybypassdomains "Ethernet" localhost 127.* 10.* 172.16.* 172.17.* 172.18.* 172.19.* 172.20.* 172.21.* 172.22.* 172.23.* 172.24.* 172.25.* 172.26.* 172.27.* 172.28.* 172.29.* 172.30.* 172.31.* 172.32.* 192.168.*''')
+    def find_ports(self):
+        ports = set()
+        self.config['worker_port'] = dict()
+        while len(ports) < (self.config['worker'] + 1):
+            R = str(random.randint(2000,8000))
+            if os.popen("netstat -aon | findstr 127.0.0.1:" + R).read() == "" and os.popen("netstat -aon | findstr [::1]:" + R).read() == "":
+                ports.add(int(R))
+        ports = list(ports)
+        for x in range(self.config['worker']):
+            self.config['worker_port'][x] = ports.pop(0)
+        self.config['dns_port'] = ports.pop(0)
 
     def write_pid(self):
         with open(self.config_path + 'pid','w') as file:
             file.write(str(os.getpid()))
+
+    async def has_internet(self):
+        server_writer = None
+        try:
+            if socket.has_dualstack_ipv6():
+                localhost = '::1'
+            else:
+                localhost = '127.0.0.1'
+            server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
+            server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
+            await server_writer.drain()
+            result = await server_reader.read(64)
+            await self.clean_up(server_writer)
+            if result == b'True':
+                return True
+            else:
+                return False
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+            await self.clean_up(server_writer)
+
+    async def yashmak_updater(self):
+        S = 0
+        while 1:
+            if time.time() - S > 7200:
+                while not (await self.has_internet()):
+                    await asyncio.sleep(10)
+                self.update_yashmak()
+                S = time.time()
+            await asyncio.sleep(300)
+
+    def update_yashmak(self):
+        try:
+            if not os.path.exists(self.config_path + 'download.json'):
+                win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    async def accept_command(self):
+        while True:
+            if self.command.poll() and self.command.recv() == 'kill':
+                print('terminate')
+                self.terminate_service()
+                sys.exit()
+            await asyncio.sleep(0.5)
 
     @staticmethod
     def translate(content):
@@ -956,14 +1431,17 @@ class yashmak(yashmak_core):
     def encode(data):
         return data.encode('utf-8')
 
+    def exception_handler(self, loop, context):
+        pass
 
-class windows(QtWidgets.QMainWindow):
+
+class yashmak_GUI(QtWidgets.QMainWindow):
     def __init__(self):
-        super(windows, self).__init__()
-        self.init_windows()
+        super(yashmak_GUI, self).__init__()
+        self.init_widget()
 
     def activate(self,reason):
-        if reason == 1:
+        if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
             position = win32api.GetCursorPos()
             self.tpmen.popup(QtCore.QPoint(position[0], position[1]))
 
@@ -971,7 +1449,7 @@ class windows(QtWidgets.QMainWindow):
         self.tpmen.close()
         self.timer.stop()
 
-    def init_windows(self):
+    def init_widget(self):
         try:
             if ctypes.windll.shell32.IsUserAnAdmin():
                 self.enable_loopback_UWPs()
@@ -979,12 +1457,12 @@ class windows(QtWidgets.QMainWindow):
             self.run()
             self.language = self.detect_language()[0]
             self.actions = {
-                'Auto': QtWidgets.QAction(self.text_translator(' 自动模式 '), triggered=lambda: self.react('Auto'),icon=QtGui.QIcon('correct.svg')),
-                'Global': QtWidgets.QAction(self.text_translator(' 全局模式 '), triggered=lambda: self.react('Global'),icon=QtGui.QIcon('correct.svg')),
-                'Direct': QtWidgets.QAction(self.text_translator(' 直连模式 '), triggered=lambda: self.react('Direct'),icon=QtGui.QIcon('correct.svg')),
-                'AutoStartup': QtWidgets.QAction(self.text_translator(' 开机自启 '), triggered=lambda: self.react('AutoStartup')),
-                'AllowUWP': QtWidgets.QAction(self.text_translator(' 允许UWP '), triggered=lambda: self.react('AllowUWP'),icon=QtGui.QIcon('hook.svg')),
-                'Close': QtWidgets.QAction(self.text_translator(' 退出 '), triggered=lambda: self.react('Close'))}
+                'Auto': QtGui.QAction(self.text_translator(' 自动模式 '), triggered=lambda: self.react('Auto'),icon=QtGui.QIcon('correct.svg')),
+                'Global': QtGui.QAction(self.text_translator(' 全局模式 '), triggered=lambda: self.react('Global'),icon=QtGui.QIcon('correct.svg')),
+                'Direct': QtGui.QAction(self.text_translator(' 直连模式 '), triggered=lambda: self.react('Direct'),icon=QtGui.QIcon('correct.svg')),
+                'AutoStartup': QtGui.QAction(self.text_translator(' 开机自启 '), triggered=lambda: self.react('AutoStartup')),
+                'AllowUWP': QtGui.QAction(self.text_translator(' 允许UWP '), triggered=lambda: self.react('AllowUWP'),icon=QtGui.QIcon('hook.svg')),
+                'Close': QtGui.QAction(self.text_translator(' 退出 '), triggered=lambda: self.react('Close'))}
             self.w = QtWidgets.QWidget()
             self.tp = QtWidgets.QSystemTrayIcon()
             self.tp.activated.connect(self.activate)
@@ -993,23 +1471,14 @@ class windows(QtWidgets.QMainWindow):
             else:
                 self.tp.setIcon(QtGui.QIcon('dark_mode_icon.svg'))
             self.tpmen = QtWidgets.QMenu()
-            if self.language == 'zh-Hans-CN':
-                self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
-                                       QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
-                                       QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
-                                       QMenu::icon {padding:8px 6px 8px 6px;}''')
-            else:
-                self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
-                                       QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
-                                       QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
-                                       QMenu::icon {padding:8px 6px 8px 6px;}''')
-            self.tpmen.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
-            self.tpmen.setWindowFlag(QtCore.Qt.FramelessWindowHint)
-            self.tpmen.setWindowFlag(QtCore.Qt.NoDropShadowWindowHint)
+            self.set_QSS()
+            self.tpmen.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            self.tpmen.setWindowFlag(QtCore.Qt.WindowType.FramelessWindowHint)
+            self.tpmen.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint)
             self.init()
             self.tp.show()
         except Exception as error:
-            if 'Yashmak has already lunched' not in error:
+            if 'Yashmak has already lunched' not in str(error):
                 self.exit()
                 self.pop_message('未知错误启动失败')
             else:
@@ -1028,6 +1497,18 @@ class windows(QtWidgets.QMainWindow):
             self.timer = QtCore.QTimer()
             self.timer.timeout.connect(self.close_menu)
             self.timer.start(10)
+
+    def set_QSS(self):
+        if self.language == 'zh-Hans-CN':
+            self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
+                                   QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
+                                   QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
+                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
+        else:
+            self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Arial; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
+                                   QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
+                                   QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
+                                   QMenu::icon {padding:8px 6px 8px 6px;}''')
 
     def react(self,message):
         if message in ['Auto','Global','Direct']:
@@ -1089,7 +1570,44 @@ class windows(QtWidgets.QMainWindow):
             self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
         self.init_menu()
 
-    def exit(self):
+    def set_proxy(self):
+        path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
+        if os.path.exists(path):
+            with open(path, 'r') as file:
+                content = file.read()
+            content = self.translate(content)
+            config = json.loads(content)
+        else:
+            raise Exception
+        platform = sys.platform
+        if platform == 'win32':
+            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
+            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Environment',0, winreg.KEY_ALL_ACCESS)
+
+            def set_key(root, name, value):
+                try:
+                    _, reg_type = winreg.QueryValueEx(root, name)
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
+                except Exception:
+                    if isinstance(value, str):
+                        reg_type = 1
+                    elif isinstance(value, int):
+                        reg_type = 4
+                    else:
+                        raise Exception
+                    winreg.SetValueEx(root, name, 0, reg_type, value)
+
+            set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
+            set_key(INTERNET_SETTINGS, 'ProxyOverride', 'localhost;127.*;10.*;172.16.*;172.17.*;172.18.*;172.19.*;172.20.*;172.21.*;172.22.*;172.23.*;172.24.*;172.25.*;172.26.*;172.27.*;172.28.*;172.29.*;172.30.*;172.31.*;172.32.*;192.168.*;windows10.microdone.cn;<local>')
+            set_key(INTERNET_SETTINGS, 'ProxyServer', 'http://127.0.0.1:' + config[config['active']]['listen'])
+            set_key(ENVIRONMENT_SETTING, 'HTTP_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
+            set_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
+            internet_set_option = ctypes.windll.wininet.InternetSetOptionW
+            internet_set_option(0, 37, 0, 0)
+            internet_set_option(0, 39, 0, 0)
+
+    @staticmethod
+    def reset_proxy():
         platform = sys.platform
         if platform == 'win32':
             INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
@@ -1120,12 +1638,6 @@ class windows(QtWidgets.QMainWindow):
             internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
-        elif platform == 'darwin':
-            os.popen('''networksetup -setwebproxystate "Wi-Fi" off''')
-            os.popen('''networksetup -setsecurewebproxystate "Wi-Fi" off''')
-            os.popen('''networksetup -setwebproxystate "Ethernet" off''')
-            os.popen('''networksetup -setsecurewebproxystate "Ethernet" off''')
-        self.kill()
 
     def auto_startup(self, enable):
         location = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/Yashmak.lnk"
@@ -1172,15 +1684,17 @@ class windows(QtWidgets.QMainWindow):
             error.__traceback__ = None
             return ['']
 
-    @staticmethod
-    def kill():
-        global process1
+    def kill(self):
         try:
-            while process1.is_alive():
-                process1.kill()
+            if self.process1.is_alive():
+                self.command_in.send('kill')
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+
+    def exit(self):
+        self.reset_proxy()
+        self.kill()
 
     def run(self):
         repaired = 0
@@ -1195,21 +1709,22 @@ class windows(QtWidgets.QMainWindow):
             except Exception as error:
                 if 'Yashmak has already lunched' in error:
                     raise Exception('Yashmak has already lunched')
-            global process1
-            process1 = multiprocessing.Process(target=yashmak)
-            process1.daemon = True
-            process1.start()
+            self.command_out, self.command_in = multiprocessing.Pipe(False)
+            self.process1 = multiprocessing.Process(target=yashmak_daemon, args=(self.command_out,))
+            self.process1.daemon = False
+            self.process1.start()
             time.sleep(1)
-            if not process1.is_alive() and repaired < 1:
+            if not self.process1.is_alive() and repaired < 1:
                 self.repair('chinalist.json')
                 repaired += 1
-            elif not process1.is_alive() and repaired == 1:
+            elif not self.process1.is_alive() and repaired == 1:
                 self.repair('old.json')
                 repaired += 1
-            elif not process1.is_alive() and repaired >= 2:
+            elif not self.process1.is_alive() and repaired >= 2:
                 raise Exception('Unknown Error')
             else:
                 break
+        self.set_proxy()
 
     def edit_config(self,key, value):
         path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
@@ -1290,5 +1805,5 @@ class windows(QtWidgets.QMainWindow):
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle('windowsvista')
-    window = windows()
-    sys.exit(app.exec_())
+    GUI = yashmak_GUI()
+    sys.exit(app.exec())
