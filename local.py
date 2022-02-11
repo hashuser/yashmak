@@ -1420,8 +1420,9 @@ class yashmak_daemon():
             if self.command.poll() and self.command.recv() == 'kill':
                 print('terminate')
                 self.terminate_service()
-                sys.exit()
-            await asyncio.sleep(0.5)
+                break
+            await asyncio.sleep(0.2)
+        sys.exit()
 
     @staticmethod
     def translate(content):
@@ -1686,8 +1687,9 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def kill(self):
         try:
-            if self.process1.is_alive():
+            while self.process1.is_alive():
                 self.command_in.send('kill')
+                time.sleep(0.2)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -1707,7 +1709,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                     if pid in psutil.pids() and psutil.Process(pid).name().lower() == 'yashmak.exe':
                         raise Exception('Yashmak has already lunched')
             except Exception as error:
-                if 'Yashmak has already lunched' in error:
+                if 'Yashmak has already lunched' in str(error):
                     raise Exception('Yashmak has already lunched')
             self.command_out, self.command_in = multiprocessing.Pipe(False)
             self.process1 = multiprocessing.Process(target=yashmak_daemon, args=(self.command_out,))
