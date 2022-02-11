@@ -652,6 +652,7 @@ class yashmak_dns():
             else:
                 client_writer.write(str(await self.has_internet()).encode('utf-8'))
             await client_writer.drain()
+            await self.clean_up(client_writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -1467,6 +1468,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.w = QtWidgets.QWidget()
             self.tp = QtWidgets.QSystemTrayIcon()
             self.tp.activated.connect(self.activate)
+            self.tp.setToolTip('Yashmak v4.0.0')
             if self.is_light_Theme():
                 self.tp.setIcon(QtGui.QIcon('light_mode_icon.svg'))
             else:
