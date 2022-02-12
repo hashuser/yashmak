@@ -20,8 +20,6 @@ import win32api
 import gc
 import psutil
 
-gc.set_threshold(100000, 50, 50)
-
 
 class yashmak_core():
     def __init__(self, config, ID):
@@ -32,6 +30,7 @@ class yashmak_core():
             error.__traceback__ = None
 
     def init(self, config, ID):
+        gc.set_threshold(100000, 50, 50)
         self.config = config
         self.ID = ID
         self.white_list = self.config['white_list']
@@ -626,6 +625,7 @@ class yashmak_dns():
             error.__traceback__ = None
 
     def init(self, config):
+        gc.set_threshold(700, 10, 10)
         self.config = config
         self.normal_context = self.get_normal_context()
         self.dns_pool = dict()
@@ -648,7 +648,11 @@ class yashmak_dns():
         try:
             host = await asyncio.wait_for(client_reader.read(65535), 20)
             if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
-                client_writer.write(str(await self.auto_resolve(host)).encode('utf-8')[3:-2].replace(b"b'",b"").replace(b"'",b"").replace(b" ",b""))
+                dns_record = str(await self.auto_resolve(host)).encode('utf-8')[3:-2]
+                dns_record = dns_record.replace(b"b'",b"")
+                dns_record = dns_record.replace(b"'",b"")
+                dns_record = dns_record.replace(b" ",b"")
+                client_writer.write(dns_record)
             else:
                 client_writer.write(str(await self.has_internet()).encode('utf-8'))
             await client_writer.drain()
@@ -760,9 +764,12 @@ class yashmak_dns():
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+        elif host not in self.dns_pool or (time.time() - self.dns_ttl[host]) > 600:
+            await self.query(host, doh)
+        if q_type != 'ALL':
             return self.dns_pool[host][q_type]
-        return (await self.query(host,doh))[q_type]
+        else:
+            return self.dns_pool[host]['A'] + self.dns_pool[host]['AAAA']
 
     async def query(self,host,doh):
         ipv4 = None
@@ -772,11 +779,10 @@ class yashmak_dns():
             if ipv4 != None and ipv6 != None:
                 break
             await asyncio.sleep(0.5)
-        result = {'A':ipv4,'AAAA':ipv6,'ALL':ipv4+ipv6}
+        result = {'A':ipv4,'AAAA':ipv6}
         if ipv4 != None and ipv6 != None:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
-        return result
 
     async def query_worker(self, host, q_type, doh):
         try:
@@ -924,6 +930,7 @@ class yashmak_log():
             error.__traceback__ = None
 
     def init(self, config):
+        gc.set_threshold(100000, 50, 50)
         self.config = config
         self.white_list = self.config['white_list']
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
@@ -1172,6 +1179,7 @@ class yashmak_load_balancer():
             error.__traceback__ = None
 
     def init(self, config):
+        gc.set_threshold(100000, 50, 50)
         self.config = config
         self.set_priority()
         self.create_loop()
@@ -1267,6 +1275,7 @@ class yashmak_daemon():
             error.__traceback__ = None
 
     def init(self, command):
+        gc.set_threshold(100000, 50, 50)
         self.command = command
         self.service = []
         self.load_config()
@@ -1440,6 +1449,7 @@ class yashmak_daemon():
 class yashmak_GUI(QtWidgets.QMainWindow):
     def __init__(self):
         super(yashmak_GUI, self).__init__()
+        gc.set_threshold(100000, 50, 50)
         self.init_widget()
 
     def activate(self,reason):
@@ -1468,7 +1478,6 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.w = QtWidgets.QWidget()
             self.tp = QtWidgets.QSystemTrayIcon()
             self.tp.activated.connect(self.activate)
-            self.tp.setToolTip('Yashmak v4.0.0')
             if self.is_light_Theme():
                 self.tp.setIcon(QtGui.QIcon('light_mode_icon.svg'))
             else:
@@ -1559,6 +1568,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             config = json.loads(content)
         else:
             raise Exception
+        ver = config['version']
+        self.tp.setToolTip('Yashmak v'+ver[0]+'.'+ver[1]+'.'+ver[2])
         if config['mode'].lower() == 'auto':
             self.set_mode_UI('Auto')
         elif config['mode'].lower() == 'global':
