@@ -12,7 +12,7 @@ import traceback
 import gzip
 import time
 import datetime
-import multiprocessing
+import aioprocessing
 import ctypes
 import winreg
 import random
@@ -47,15 +47,13 @@ class yashmak_core():
         self.set_priority()
         self.create_loop()
 
-    def create_server(self):
-        if socket.has_dualstack_ipv6():
-            listener = socket.create_server(address=('::1', self.config['worker_port'][self.ID]), family=socket.AF_INET6,
-                                            dualstack_ipv6=True)
-        else:
-            listener = socket.create_server(address=('127.0.0.1', self.config['worker_port'][self.ID]), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
-        #print(listener)
-        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+    async def create_server(self):
+        try:
+            while True:
+                sock = await self.config['pipes_sock'][self.ID][0].coro_recv()
+                self.loop.create_task(self.handler(sock))
+        except Exception as error:
+            print(error,'s')
 
     def create_loop(self):
         self.loop = asyncio.new_event_loop()
@@ -73,22 +71,22 @@ class yashmak_core():
         p = psutil.Process(os.getpid())
         p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
 
-    async def handler(self, client_reader, client_writer):
+    async def handler(self, sock):
         try:
-            data, URL, host, port, request_type = await self.process(client_reader, client_writer)
-            await self.redirect(client_writer,host,URL)
-            await self.proxy(host,port,request_type,data,client_reader,client_writer,self.get_type(host))
+            data, URL, host, port, request_type = await self.process(sock)
+            await self.redirect(sock,host,URL)
+            await self.proxy(host,port,request_type,data,sock,self.get_type(host))
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(client_writer)
+            await self.clean_up(sock)
 
-    async def make_switches(self,cr,cw,sr,sw,request_type):
+    async def make_switches(self,sock,sr,sw,request_type):
         if request_type == 1 or request_type == 2:
             scan = True
         else:
             scan = False
-        return [asyncio.create_task(self.switch_up(cr,sw,scan)),asyncio.create_task(self.switch_down(sr,cw))]
+        return [asyncio.create_task(self.switch_up(sock,sw,scan)),asyncio.create_task(self.switch_down(sr,sock))]
 
     async def switch_down(self, reader, writer):
         try:
@@ -96,8 +94,7 @@ class yashmak_core():
                 data = await reader.read(16384)
                 if data == b'':
                     raise Exception
-                writer.write(data)
-                await writer.drain()
+                await self.loop.sock_sendall(writer, data)
         except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -106,7 +103,7 @@ class yashmak_core():
     async def switch_up(self, reader, writer, scan):
         try:
             while 1:
-                data = await reader.read(65536)
+                data = await self.loop.sock_recv(reader, 65535)
                 if data == b'':
                     raise Exception
                 if scan:
@@ -120,7 +117,7 @@ class yashmak_core():
             error.__traceback__ = None
             await self.clean_up(writer)
 
-    async def redirect(self, writer, host, URL):
+    async def redirect(self, sock, host, URL):
         try:
             def HSTS(HSTS_list,host):
                 if host in HSTS_list:
@@ -134,31 +131,31 @@ class yashmak_core():
                         return True
 
             if URL != None and HSTS(self.HSTS_list,host):
-                await self.http_response(writer, 301, URL)
-                await self.clean_up(writer)
+                await self.http_response(sock, 301, URL)
+                await self.clean_up(sock)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             raise Exception(error)
 
-    async def proxy(self, host, port, request_type, data, client_reader, client_writer, type):
+    async def proxy(self, host, port, request_type, data, sock, type):
         server_reader, server_writer = None, None
         try:
-            server_reader, server_writer = await self.make_proxy(host,port,data,request_type,type,client_writer)
+            server_reader, server_writer = await self.make_proxy(host,port,data,request_type,type,sock)
             if server_reader == None or server_writer == None:
                 raise Exception
-            done, pending = await asyncio.wait(await self.make_switches(client_reader, client_writer, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
+            done, pending = await asyncio.wait(await self.make_switches(sock, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
-            await self.clean_up(client_writer, server_writer)
+            await self.clean_up(sock, server_writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(client_writer, server_writer)
+            await self.clean_up(sock, server_writer)
 
-    async def make_proxy(self,host,port,data,request_type,type,client_writer):
+    async def make_proxy(self,host,port,data,request_type,type,sock):
         server_reader, server_writer = None, None
-        IPs = await self.get_IPs(type,host,client_writer)
+        IPs = await self.get_IPs(type,host,sock)
         IPs_length = len(IPs)
         for x in range(IPs_length):
             address = IPs[int(random.random() * 1000 % IPs_length)]
@@ -172,25 +169,25 @@ class yashmak_core():
                     error.__traceback__ = None
                     continue
             elif not request_type:
-                await self.http_response(client_writer, 404)
+                await self.http_response(sock, 404)
                 raise Exception
             if not request_type:
-                await self.http_response(client_writer, 200)
+                await self.http_response(sock, 200)
             elif data != None:
                 server_writer.write(data)
                 await server_writer.drain()
             break
         return server_reader, server_writer
 
-    async def get_IPs(self,type,host,client_writer):
+    async def get_IPs(self,type,host,sock):
         if not type:
             try:
                 IPs = await self.resolve(host)
             except Exception:
-                await self.http_response(client_writer, 502)
+                await self.http_response(sock, 502)
                 raise Exception('No IP Error')
             if IPs == None or IPs == []:
-                await self.http_response(client_writer, 502)
+                await self.http_response(sock, 502)
                 raise Exception
         else:
             IPs = [None]
@@ -209,19 +206,17 @@ class yashmak_core():
         await server_writer.drain()
         return server_reader, server_writer
 
-    @staticmethod
-    async def http_response(writer,type,URL=None):
+    async def http_response(self, sock,type,URL=None):
         if type == 200:
-            writer.write(b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
         elif type == 301:
-            writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
         elif type == 404:
-            writer.write(b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
         elif type == 502:
-            writer.write(b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
         else:
             raise Exception('Unknown Status Code')
-        await writer.drain()
 
     @staticmethod
     async def clean_up(writer1=None, writer2=None):
@@ -382,8 +377,7 @@ class yashmak_core():
     async def white_list_updater(self):
         while True:
             try:
-                if self.config['pipes'][self.ID][0].poll():
-                    self.white_list = self.white_list.union(self.config['pipes'][self.ID][0].recv())
+                self.white_list = self.white_list.union(await self.config['pipes'][self.ID][0].coro_recv())
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -392,13 +386,13 @@ class yashmak_core():
     def exception_handler(self, loop, context):
         pass
 
-    async def process(self, client_reader, client_writer):
-        data = await asyncio.wait_for(client_reader.read(65535), 20)
+    async def process(self, sock):
+        data = await asyncio.wait_for(self.loop.sock_recv(sock, 65535), 20)
         if data == b'':
             raise Exception
         request_type = self.get_request_type(data)
         if request_type == 3:
-            host, port = await self.get_socks5_address(client_reader, client_writer)
+            host, port = await self.get_socks5_address(sock)
             data = None
             URL = None
         elif request_type == 0:
@@ -483,12 +477,10 @@ class yashmak_core():
         host = host.replace(b']', b'', 1)
         return URL, host, port
 
-    @staticmethod
-    async def get_socks5_address(client_reader, client_writer):
+    async def get_socks5_address(self, sock):
         host, port = None, None
-        client_writer.write(b'\x05\x00')
-        await client_writer.drain()
-        data = await asyncio.wait_for(client_reader.read(65535), 20)
+        await self.loop.sock_sendall(sock, b'\x05\x00')
+        data = await asyncio.wait_for(self.loop.sock_recv(sock, 65535), 20)
         if data[3] == 1:
             host = socket.inet_ntop(socket.AF_INET, data[4:8]).encode('utf-8')
             port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
@@ -498,8 +490,7 @@ class yashmak_core():
         elif data[3] == 3:
             host = data[5:5 + data[4]]
             port = str(int.from_bytes(data[-2:], 'big')).encode('utf-8')
-        client_writer.write(b'\x05\x00\x00' + data[3:])
-        await client_writer.drain()
+        await self.loop.sock_sendall(sock, b'\x05\x00\x00' + data[3:])
         return host, port
 
     @staticmethod
@@ -1195,45 +1186,20 @@ class yashmak_load_balancer():
         p = psutil.Process(os.getpid())
         p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
 
-    def create_server(self):
+    async def create_server(self):
         if socket.has_dualstack_ipv6():
             listener = socket.create_server(address=('::', self.config['listen']), family=socket.AF_INET6,
-                                            dualstack_ipv6=True)
+                                            dualstack_ipv6=True, backlog=2048)
         else:
             listener = socket.create_server(address=('0.0.0.0', self.config['listen']), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
-        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
-
-    async def handler(self, client_reader, client_writer):
-        server_writer = None
-        try:
-            if socket.has_dualstack_ipv6():
-                host = '::1'
-            else:
-                host = '127.0.0.1'
-            server_reader, server_writer = await asyncio.open_connection(host=host, port=self.config['worker_port'][random.randint(0,self.config['worker']-1)])
-            done, pending = await asyncio.wait([asyncio.create_task(self.switch(client_reader,server_writer)),asyncio.create_task(self.switch(server_reader,client_writer))],return_when=asyncio.FIRST_COMPLETED)
-            for x in pending:
-                x.cancel()
-            await self.clean_up(client_writer, server_writer)
-        except Exception as error:
-            print(error)
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            await self.clean_up(client_writer,server_writer)
-
-    async def switch(self, reader, writer):
-        try:
-            while True:
-                data = await reader.read(16384)
-                if data == b'':
-                    raise Exception
-                writer.write(data)
-                await writer.drain()
-        except BaseException as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            await self.clean_up(writer)
+                                            dualstack_ipv6=False, backlog=2048)
+        while True:
+            try:
+                for x in range(self.config['worker']):
+                    sock, _ = await self.loop.sock_accept(listener)
+                    await self.config['pipes_sock'][x][1].coro_send(sock)
+            except Exception as error:
+                print(error)
 
     @staticmethod
     async def clean_up(writer1=None, writer2=None):
@@ -1300,12 +1266,11 @@ class yashmak_daemon():
         p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
 
     def run_service(self):
-        self.service.append(multiprocessing.Process(target=yashmak_dns,args=(self.config,)))
-        self.service.append(multiprocessing.Process(target=yashmak_log, args=(self.config,)))
-        self.service.append(multiprocessing.Process(target=yashmak_load_balancer, args=(self.config,)))
+        self.service.append(aioprocessing.AioProcess(target=yashmak_dns,args=(self.config,)))
+        self.service.append(aioprocessing.AioProcess(target=yashmak_log, args=(self.config,)))
+        self.service.append(aioprocessing.AioProcess(target=yashmak_load_balancer, args=(self.config,)))
         for x in range(self.config['worker']):
-            self.service.append(multiprocessing.Process(target=yashmak_core,args=(self.config,x,)))
-        #print(len(self.service))
+            self.service.append(aioprocessing.AioProcess(target=yashmak_core,args=(self.config,x,)))
         for x in self.service:
             x.start()
 
@@ -1368,7 +1333,10 @@ class yashmak_daemon():
     def create_pipes(self):
         self.config['pipes'] = dict()
         for x in range(self.config['worker']):
-            self.config['pipes'][x] = (multiprocessing.Pipe(False))
+            self.config['pipes'][x] = (aioprocessing.AioPipe(False))
+        self.config['pipes_sock'] = dict()
+        for x in range(self.config['worker']):
+            self.config['pipes_sock'][x] = (aioprocessing.AioPipe(False))
 
     def find_ports(self):
         ports = set()
@@ -1427,7 +1395,7 @@ class yashmak_daemon():
 
     async def accept_command(self):
         while True:
-            if self.command.poll() and self.command.recv() == 'kill':
+            if await self.command.coro_recv() == 'kill':
                 print('terminate')
                 self.terminate_service()
                 break
@@ -1724,9 +1692,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             except Exception as error:
                 if 'Yashmak has already lunched' in str(error):
                     raise Exception('Yashmak has already lunched')
-            self.command_out, self.command_in = multiprocessing.Pipe(False)
-            self.process1 = multiprocessing.Process(target=yashmak_daemon, args=(self.command_out,))
-            self.process1.daemon = False
+            self.command_out, self.command_in = aioprocessing.AioPipe(False)
+            self.process1 = aioprocessing.AioProcess(target=yashmak_daemon, args=(self.command_out,))
             self.process1.start()
             time.sleep(1)
             if not self.process1.is_alive() and repaired < 1:
