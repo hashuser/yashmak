@@ -17,6 +17,9 @@ import ctypes
 import winreg
 import random
 import win32api
+import win32gui
+import win32con
+import win32print
 import gc
 import psutil
 
@@ -1415,25 +1418,35 @@ class yashmak_daemon():
 
 
 class yashmak_GUI(QtWidgets.QMainWindow):
-    def __init__(self):
+    def __init__(self, screen_size):
         super(yashmak_GUI, self).__init__()
         gc.set_threshold(100000, 50, 50)
-        self.init_widget()
+        self.init_widget(screen_size)
+
+    @staticmethod
+    def get_real(screen_size):
+        hDC = win32gui.GetDC(0)
+        wr = win32print.GetDeviceCaps(hDC, win32con.DESKTOPHORZRES)
+        hr = win32print.GetDeviceCaps(hDC, win32con.DESKTOPVERTRES)
+        w = screen_size.width()
+        h = screen_size.height()
+        return w / wr, h / hr
 
     def activate(self,reason):
         if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Context:
             position = win32api.GetCursorPos()
-            self.tpmen.popup(QtCore.QPoint(position[0], position[1]))
+            self.tpmen.popup(QtCore.QPoint(int(position[0]*self.real[0]), int(position[1]*self.real[1])))
 
     def close_menu(self):
         self.tpmen.close()
         self.timer.stop()
 
-    def init_widget(self):
+    def init_widget(self, screen_size):
         try:
             if ctypes.windll.shell32.IsUserAnAdmin():
                 self.enable_loopback_UWPs()
                 sys.exit(0)
+            self.real = self.get_real(screen_size)
             self.run()
             self.language = self.detect_language()[0]
             self.actions = {
@@ -1787,5 +1800,5 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle('windowsvista')
-    GUI = yashmak_GUI()
+    GUI = yashmak_GUI(app.screens()[0].size())
     sys.exit(app.exec())
