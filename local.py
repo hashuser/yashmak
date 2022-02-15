@@ -1391,7 +1391,7 @@ class yashmak_daemon():
     def update_yashmak(self):
         try:
             if not os.path.exists(self.config_path + 'download.json'):
-                win32api.ShellExecute(0, 'open', r'Downloader.exe', '', '', 1)
+                win32api.ShellExecute(0, 'open', os.path.abspath(os.path.dirname(sys.argv[0])) + '/Downloader.exe', '', '', 1)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -1399,7 +1399,6 @@ class yashmak_daemon():
     async def accept_command(self):
         while True:
             if await self.command.coro_recv() == 'kill':
-                print('terminate')
                 self.terminate_service()
                 break
             await asyncio.sleep(0.2)
@@ -1415,6 +1414,33 @@ class yashmak_daemon():
 
     def exception_handler(self, loop, context):
         pass
+
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
+        try:
+            if writer1 != None:
+                writer1.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                writer2.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
 
 class yashmak_GUI(QtWidgets.QMainWindow):
