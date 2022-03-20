@@ -404,15 +404,14 @@ class yashmak_core(yashmak_base):
         return self.internet_status
 
     async def internet_refresh_cache(self):
-        server_writer = None
         while True:
+            server_writer = None
             try:
                 if socket.has_dualstack_ipv6():
                     localhost = '::1'
                 else:
                     localhost = '127.0.0.1'
-                server_reader, server_writer = await asyncio.open_connection(host=localhost,
-                                                                             port=self.config['dns_port'])
+                server_reader, server_writer = await asyncio.open_connection(host=localhost,port=self.config['dns_port'])
                 server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
                 await server_writer.drain()
                 result = await server_reader.read(64)
@@ -599,11 +598,11 @@ class yashmak_core(yashmak_base):
 
     async def dns_query(self,host):
         result = await self.dns_query_worker(host)
-        if result == None:
-            raise Exception
-        else:
+        if result:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
+        else:
+            raise Exception
         return result
 
     async def dns_query_worker(self, host):
@@ -739,10 +738,9 @@ class yashmak_dns(yashmak_base):
         return self.ipv6
 
     def has_internet(self):
-        if not self.ipv4 and not self.ipv6:
-            return False
-        else:
+        if self.ipv4 or self.ipv6:
             return True
+        return False
 
     async def internet_refresh_cache(self):
         while True:
@@ -803,22 +801,23 @@ class yashmak_dns(yashmak_base):
         if not ipv6:
             ipv6 = ([], 2147483647)
         result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
-        self.dns_pool[host] = result
-        if not ipv4[0] and not ipv6[0]:
-            self.dns_ttl[host] = -1
-        else:
-            self.dns_ttl[host] = time.time() + min(ipv4[1],ipv6[1])
+        if ipv4[0] or ipv6[0]:
+            self.dns_pool[host] = result
+            self.dns_ttl[host] = time.time() + min(ipv4[1], ipv6[1])
 
     async def dns_query_worker(self, host, q_type, doh, dns_server=None, timeout=5):
         try:
             if dns_server is None:
                 dns_server = {'ipv4': True, 'ipv6': True}
-            done, pending, = await asyncio.wait(await self.dns_make_tasks(host, q_type, doh, dns_server, timeout),return_when=asyncio.FIRST_COMPLETED)
-            for x in pending:
-                x.cancel()
-            result = message.from_wire(done.pop().result())
-            IPs, TTL = self.dns_decode(str(result), q_type)
-            return IPs, TTL
+            tasks = await self.dns_make_tasks(host, q_type, doh, dns_server, timeout)
+            if tasks:
+                done, pending, = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for x in pending:
+                    x.cancel()
+                results = []
+                for x in range(len(done)):
+                    results.append(done.pop().result())
+                return self.dns_decode(results, q_type)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -876,7 +875,7 @@ class yashmak_dns(yashmak_base):
             await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
             await self.loop.sock_sendall(s, query)
             try:
-                result = await asyncio.wait_for(self.loop.sock_recv(s, 4096), timeout)
+                result = await asyncio.wait_for(self.loop.sock_recv(s, 16384), timeout)
             except asyncio.exceptions.TimeoutError:
                 raise Exception('timeout')
             return result
@@ -894,7 +893,7 @@ class yashmak_dns(yashmak_base):
             server_reader, server_writer = await asyncio.open_connection(host=address[0],port=address[1],ssl=self.normal_context,server_hostname=hostname,ssl_handshake_timeout=2)
             server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
             await server_writer.drain()
-            result = await asyncio.wait_for(server_reader.read(4096),2)
+            result = await asyncio.wait_for(server_reader.read(16384),2)
             result = result[result.find(b'\r\n\r\n')+4:]
             return result
         except Exception as error:
@@ -905,19 +904,30 @@ class yashmak_dns(yashmak_base):
             await self.clean_up(server_writer)
 
     @staticmethod
-    def dns_decode(result, type):
-        IPs, TTLs = [], []
-        type = ' IN ' + type.upper() + ' '
-        len_type = len(type)
-        position = result.find(type)
-        if position < 0:
-            return []
-        while position > 0:
-            TTLs.append(int(result[result.find(' ', position - 10) + 1:position]))
-            IPs.append(result[position + len_type:result.find('\n', position)].encode('utf-8'))
-            position = result.find(type, position + len_type)
-        TTLs.sort()
-        return IPs, TTLs[0]
+    def dns_decode(results, q_type):
+        def decoder(result, q_type, len_q_type):
+            result = str(message.from_wire(result))
+            IPs, TTLs = [], []
+            position = result.find(q_type)
+            if position < 0:
+                return []
+            while position > 0:
+                TTLs.append(int(result[result.find(' ', position - 10) + 1:position]))
+                IPs.append(result[position + len_q_type:result.find('\n', position)].encode('utf-8'))
+                position = result.find(q_type, position + len_q_type)
+            TTLs.sort()
+            return IPs, TTLs[0]
+
+        q_type = ' IN ' + q_type.upper() + ' '
+        len_q_type = len(q_type)
+        for x in results:
+            try:
+                if x:
+                    IPs, TTL = decoder(x, q_type, len_q_type)
+                    return IPs, TTL
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
 
     async def dns_refresh_cache(self):
         while True:
@@ -1015,8 +1025,8 @@ class yashmak_log(yashmak_base):
         return self.internet_status
 
     async def internet_refresh_cache(self):
-        server_writer = None
         while True:
+            server_writer = None
             try:
                 if socket.has_dualstack_ipv6():
                     localhost = '::1'
@@ -1117,14 +1127,14 @@ class yashmak_log(yashmak_base):
 
     async def query(self,host):
         result = await self.query_worker(host)
-        if result == None:
-            raise Exception
-        else:
+        if result:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
+        else:
+            raise Exception
         return result
 
-    async def query_worker(self, host):
+    async def dns_query_worker(self, host):
         server_writer = None
         try:
             if socket.has_dualstack_ipv6():
@@ -1134,7 +1144,11 @@ class yashmak_log(yashmak_base):
             server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
             server_writer.write(host)
             await server_writer.drain()
-            result = (await server_reader.read(65535)).split(b',')
+            data = await server_reader.read(65535)
+            if data == b'None':
+                result = None
+            else:
+                result = data.split(b',')
             return result
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -1188,8 +1202,8 @@ class yashmak_load_balancer(yashmak_base):
         self.loop.run_forever()
 
     async def create_server(self):
-        sock = None
         while True:
+            sock = None
             try:
                 for x in range(self.config['worker']):
                     sock, _ = await self.loop.sock_accept(self.listener)
@@ -1366,8 +1380,8 @@ class yashmak_daemon(yashmak_base):
         return self.internet_status
 
     async def internet_refresh_cache(self):
-        server_writer = None
         while True:
+            server_writer = None
             try:
                 if socket.has_dualstack_ipv6():
                     localhost = '::1'
@@ -1869,11 +1883,15 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     @staticmethod
     def panic_log(error):
-        if error != 'EXIT':
-            path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/panic_log.txt'
-            with open(path, 'a') as file:
-                file.write(time.strftime("%Y/%m/%d %H:%M:%S", time.localtime()) + " " + error + "\n")
-                file.flush()
+        try:
+            if error != 'EXIT':
+                path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/panic_log.txt'
+                with open(path, 'a') as file:
+                    file.write(time.strftime("%Y/%m/%d %H:%M:%S", time.localtime()) + " " + error + "\n")
+                    file.flush()
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     @staticmethod
     def translate(content):
