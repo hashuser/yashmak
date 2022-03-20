@@ -188,6 +188,7 @@ class yashmak_core(yashmak_base):
         except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(writer)
 
     async def switch_up(self, reader, writer, scan):
@@ -205,6 +206,7 @@ class yashmak_core(yashmak_base):
         except BaseException as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(writer)
 
     async def redirect(self, sock, host, URL):
@@ -213,7 +215,7 @@ class yashmak_core(yashmak_base):
                 if host in HSTS_list:
                     return True
                 sigment_length = len(host)
-                while 1:
+                while True:
                     sigment_length = host.rfind(b'.', 0, sigment_length) - 1
                     if sigment_length <= -1:
                         break
@@ -237,10 +239,10 @@ class yashmak_core(yashmak_base):
             done, pending = await asyncio.wait(await self.make_switches(sock, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
-            await self.clean_up(sock, server_writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(sock, server_writer)
 
     async def make_proxy(self,host,port,data,request_type,abroad,sock):
@@ -317,7 +319,7 @@ class yashmak_core(yashmak_base):
         self.is_connecting = 0
         if self.config['mode'] == 'direct':
             return 0
-        while 1:
+        while True:
             for x in range(self.pool_max_size-(len(self.connection_pool) + self.is_checking + self.is_connecting)):
                 try:
                     self.loop.create_task(self.make_connections())
@@ -353,7 +355,7 @@ class yashmak_core(yashmak_base):
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                if port == self.config['port'] and (await self.has_internet()):
+                if port == self.config['port'] and self.has_internet():
                     self.main_port_fail += 1
         if server_reader == None or server_writer == None:
             raise Exception
@@ -398,7 +400,7 @@ class yashmak_core(yashmak_base):
             self.unhealthy += 1
             await self.clean_up(x[0], x[1])
 
-    async def has_internet(self):
+    def has_internet(self):
         return self.internet_status
 
     async def internet_refresh_cache(self):
@@ -432,7 +434,8 @@ class yashmak_core(yashmak_base):
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-            await self.sleep(60)
+            finally:
+                await self.sleep(60)
 
     def exception_handler(self, loop, context):
         pass
@@ -617,25 +620,27 @@ class yashmak_core(yashmak_base):
             if data == b'None':
                 result = None
             else:
-                result = (data).split(b',')
-            await self.clean_up(server_writer)
+                result = data.split(b',')
             return result
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(server_writer)
 
     async def dns_clear_cache(self):
         while True:
             try:
                 for x in list(self.dns_pool.keys()):
-                    if (time.time() - self.dns_ttl[x]) > 60:
-                        del self.dns_pool[x]
+                    if x in self.dns_ttl and (time.time() - self.dns_ttl[x]) >= 60:
+                        if x in self.dns_pool:
+                            del self.dns_pool[x]
                         del self.dns_ttl[x]
-                await self.sleep(10)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+            finally:
+                await self.sleep(10)
 
     def get_calculated_port(self):
         return 1024 + self.get_today() % 8976
@@ -686,7 +691,7 @@ class yashmak_dns(yashmak_base):
         try:
             host = await asyncio.wait_for(client_reader.read(65535), 20)
             if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
-                while not await self.has_internet():
+                while not self.has_internet():
                     await self.sleep(1)
                 dns_record = await self.auto_resolve(host)
                 if dns_record:
@@ -698,12 +703,12 @@ class yashmak_dns(yashmak_base):
                 else:
                     client_writer.write(b'None')
             else:
-                client_writer.write(str(await self.has_internet()).encode('utf-8'))
+                client_writer.write(str(self.has_internet()).encode('utf-8'))
             await client_writer.drain()
-            await self.clean_up(client_writer)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(client_writer)
 
     @staticmethod
@@ -733,7 +738,7 @@ class yashmak_dns(yashmak_base):
         self.ipv6 = await self.network_detector(tasks, {'ipv4': False, 'ipv6': True})
         return self.ipv6
 
-    async def has_internet(self):
+    def has_internet(self):
         if not self.ipv4 and not self.ipv6:
             return False
         else:
@@ -773,13 +778,16 @@ class yashmak_dns(yashmak_base):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host not in self.dns_pool or self.dns_ttl[host] < 0 or time.time() > self.dns_ttl[host]:
+        elif host not in self.dns_pool or time.time() >= self.dns_ttl[host]:
             await self.dns_query(host, doh)
-        self.dns_hit_record[host] = time.time() + 3600
-        if q_type != 'ALL':
-            return self.dns_pool[host][q_type]
+        if host in self.dns_pool:
+            self.dns_hit_record[host] = time.time() + 3600
+            if q_type != 'ALL':
+                return self.dns_pool[host][q_type]
+            else:
+                return self.dns_pool[host]['A'] + self.dns_pool[host]['AAAA']
         else:
-            return self.dns_pool[host]['A'] + self.dns_pool[host]['AAAA']
+            return []
 
     async def dns_query(self,host,doh):
         for timeout in [1,1,2,4]:
@@ -788,7 +796,8 @@ class yashmak_dns(yashmak_base):
                 break
         if not ipv4 and not ipv6:
             ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', not doh), self.dns_query_worker(host, 'AAAA', not doh))
-            doh = not doh
+            if ipv4 or ipv6:
+                doh = not doh
         if not ipv4:
             ipv4 = ([], 2147483647)
         if not ipv6:
@@ -876,7 +885,6 @@ class yashmak_dns(yashmak_base):
                 await self.sleep(timeout)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(s)
         finally:
             await self.clean_up(s)
 
@@ -893,7 +901,6 @@ class yashmak_dns(yashmak_base):
             await self.sleep(4)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(server_writer)
         finally:
             await self.clean_up(server_writer)
 
@@ -915,39 +922,39 @@ class yashmak_dns(yashmak_base):
     async def dns_refresh_cache(self):
         while True:
             try:
-                if await self.has_internet():
+                if self.has_internet():
                     refreshable = []
                     for x in list(self.dns_pool.keys()):
-                        if time.time() > self.dns_ttl[x] > 0:
+                        if x in self.dns_ttl and time.time() >= self.dns_ttl[x] > 0:
                             refreshable.append(x)
                     self.loop.create_task(self.dns_refresh_cache_worker(refreshable))
-                await self.sleep(1)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+            finally:
+                await self.sleep(1)
 
     async def dns_refresh_cache_worker(self, refreshable):
-        counter = 0
-        refreshable_len = len(refreshable)
-        while True:
-            for x in range(10):
-                counter += 1
-                if counter > refreshable_len:
-                    return 0
-                self.loop.create_task(self.dns_query(refreshable[counter - 1], self.dns_pool[refreshable[counter - 1]]['doh']))
+        for x in refreshable:
+            while not self.has_internet():
+                await self.sleep(1)
+            self.loop.create_task(self.dns_query(x, self.dns_pool[x]['doh']))
 
     async def dns_clear_cache(self):
         while True:
             try:
                 for x in list(self.dns_pool.keys()):
-                    if time.time() > self.dns_hit_record[x]:
-                        del self.dns_pool[x]
-                        del self.dns_ttl[x]
+                    if x in self.dns_hit_record and time.time() >= self.dns_hit_record[x]:
+                        if x in self.dns_pool:
+                            del self.dns_pool[x]
+                        if x in self.dns_ttl:
+                            del self.dns_ttl[x]
                         del self.dns_hit_record[x]
-                await self.sleep(60)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+            finally:
+                await self.sleep(60)
 
     def exception_handler(self, loop, context):
         pass
@@ -999,12 +1006,12 @@ class yashmak_log(yashmak_base):
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                if port == self.config['port'] and (await self.has_internet()):
+                if port == self.config['port'] and self.has_internet():
                     self.main_port_fail += 1
         if server_reader == None or server_writer == None:
             raise Exception
 
-    async def has_internet(self):
+    def has_internet(self):
         return self.internet_status
 
     async def internet_refresh_cache(self):
@@ -1063,7 +1070,8 @@ class yashmak_log(yashmak_base):
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-            await self.sleep(60)
+            finally:
+                await self.sleep(60)
 
     async def white_list_update_worker(self):
         server_writer = None
@@ -1079,11 +1087,11 @@ class yashmak_log(yashmak_base):
                 if data == b'' or data == b'\n':
                     break
                 customize += data
-            await self.clean_up(server_writer)
             return customize
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(server_writer)
 
     @staticmethod
@@ -1103,7 +1111,7 @@ class yashmak_log(yashmak_base):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
+        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 60:
             return self.dns_pool[host]
         return await self.query(host)
 
@@ -1127,24 +1135,26 @@ class yashmak_log(yashmak_base):
             server_writer.write(host)
             await server_writer.drain()
             result = (await server_reader.read(65535)).split(b',')
-            await self.clean_up(server_writer)
             return result
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
+        finally:
             await self.clean_up(server_writer)
 
     async def clear_cache(self):
-        while 1:
+        while True:
             try:
                 for x in list(self.dns_pool.keys()):
-                    if (time.time() - self.dns_ttl[x]) > 600:
-                        del self.dns_pool[x]
+                    if x in self.dns_ttl and (time.time() - self.dns_ttl[x]) >= 60:
+                        if x in self.dns_pool:
+                            del self.dns_pool[x]
                         del self.dns_ttl[x]
-                await self.sleep(300)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+            finally:
+                await self.sleep(10)
 
     def get_calculated_port(self):
         return 1024 + self.get_today() % 8976
@@ -1178,6 +1188,7 @@ class yashmak_load_balancer(yashmak_base):
         self.loop.run_forever()
 
     async def create_server(self):
+        sock = None
         while True:
             try:
                 for x in range(self.config['worker']):
@@ -1186,6 +1197,7 @@ class yashmak_load_balancer(yashmak_base):
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+                await self.clean_up(sock)
 
     def get_listener(self):
         if socket.has_dualstack_ipv6():
@@ -1317,7 +1329,7 @@ class yashmak_daemon(yashmak_base):
         for x in data:
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
-        for x in ['10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.168.0.0/16','::1/128','fd00::/8']:
+        for x in ['10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.168.0.0/16','::1/128','fd00::/8','fe80::/10']:
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
@@ -1350,7 +1362,7 @@ class yashmak_daemon(yashmak_base):
             file.write(str(os.getpid()))
             file.flush()
 
-    async def has_internet(self):
+    def has_internet(self):
         return self.internet_status
 
     async def internet_refresh_cache(self):
@@ -1378,9 +1390,9 @@ class yashmak_daemon(yashmak_base):
 
     async def yashmak_updater(self):
         S = 0
-        while 1:
+        while True:
             if time.time() - S > 7200:
-                while not (await self.has_internet()):
+                while not self.has_internet():
                     await self.sleep(1)
                 self.update_yashmak()
                 S = time.time()
@@ -1418,11 +1430,11 @@ class yashmak_daemon(yashmak_base):
     async def send_feedback(self):
         await self.sleep(2)
         while True:
-            if await self.has_internet():
+            if self.has_internet():
                 self.response.put('OK')
             else:
                 self.response.put('No internet connection')
-                print('network error')
+                #print('network error')
             await self.sleep(1)
 
     @staticmethod
