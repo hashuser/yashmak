@@ -1000,6 +1000,7 @@ class yashmak_log(yashmak_base):
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.white_list_updater())
         self.loop.create_task(self.internet_refresh_cache())
+        self.loop.create_task(self.dns_clear_cache())
         self.loop.run_forever()
 
     async def connect_proxy_server(self):
@@ -1123,10 +1124,10 @@ class yashmak_log(yashmak_base):
             return [host]
         elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 60:
             return self.dns_pool[host]
-        return await self.query(host)
+        return await self.dns_query(host)
 
-    async def query(self,host):
-        result = await self.query_worker(host)
+    async def dns_query(self,host):
+        result = await self.dns_query_worker(host)
         if result:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
@@ -1156,7 +1157,7 @@ class yashmak_log(yashmak_base):
         finally:
             await self.clean_up(server_writer)
 
-    async def clear_cache(self):
+    async def dns_clear_cache(self):
         while True:
             try:
                 for x in list(self.dns_pool.keys()):
