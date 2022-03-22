@@ -697,7 +697,6 @@ class yashmak_dns(ymc_base):
         try:
             host = await asyncio.wait_for(client_reader.read(65535), 20)
             if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
-                await self.wait_until_has_internet()
                 dns_record = await self.auto_resolve(host)
                 if dns_record:
                     dns_record = str(dns_record).encode('utf-8')[3:-2]
@@ -784,7 +783,8 @@ class yashmak_dns(ymc_base):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host not in self.dns_pool or time.time() >= self.dns_ttl[host]:
+        elif host not in self.dns_pool or (host in self.dns_ttl and time.time() >= self.dns_ttl[host]):
+            # await self.wait_until_has_internet()
             await self.dns_query(host, doh)
         if host in self.dns_pool:
             self.dns_hit_record[host] = time.time() + 3600
@@ -808,8 +808,8 @@ class yashmak_dns(ymc_base):
             ipv4 = ([], 2147483647)
         if not ipv6:
             ipv6 = ([], 2147483647)
-        result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
         if ipv4[0] or ipv6[0]:
+            result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time() + min(ipv4[1], ipv6[1])
 
@@ -939,18 +939,20 @@ class yashmak_dns(ymc_base):
 
     async def dns_refresh_cache(self):
         while True:
+            s = time.time()
             try:
                 if self.has_internet():
                     refreshable = []
                     for x in list(self.dns_pool.keys()):
                         if x in self.dns_ttl and time.time() >= self.dns_ttl[x] > 0:
                             refreshable.append(x)
-                    self.loop.create_task(self.dns_refresh_cache_worker(refreshable))
+                    await self.dns_refresh_cache_worker(refreshable)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                await self.sleep(1)
+                if time.time() - s < 1:
+                    await self.sleep(1)
 
     async def dns_refresh_cache_worker(self, refreshable):
         for x in refreshable:
@@ -1314,13 +1316,15 @@ class yashmak_daemon(ymc_internet_status_cache):
             os.kill(os.getpid(), signal.SIGTERM)
 
     async def send_feedback(self):
-        await self.sleep(2)
+        counter = 0
         while True:
             if self.has_internet():
                 self.response.put('OK')
-            else:
+                counter = 0
+            elif counter > 3:
                 self.response.put('No internet connection')
-                #print('network error')
+            else:
+                counter += 1
             await self.sleep(1)
 
     @staticmethod
