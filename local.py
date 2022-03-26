@@ -91,6 +91,24 @@ class ymc_base:
         return data.encode('utf-8')
 
     @staticmethod
+    def decode(data):
+        return data.decode('utf-8')
+
+    @staticmethod
+    def base64_encode(data):
+        if isinstance(data,str):
+            data = data.encode('utf-8')
+            return base64.b64encode(data).decode('utf-8')
+        return base64.b64encode(data)
+
+    @staticmethod
+    def base64_decode(data):
+        if isinstance(data,str):
+            data = data.encode('utf-8')
+            return base64.b64decode(data).decode('utf-8')
+        return base64.b64decode(data)
+
+    @staticmethod
     async def sleep(sec):
         if sec <= 1:
             await asyncio.sleep(sec)
@@ -109,26 +127,26 @@ class ymc_dns_cache(ymc_base):
     def __init__(self):
         self.dns_pool = dict()
         self.dns_ttl = dict()
-        self.timeout_threshold = 60
+        self.timeout_threshold = 600
 
     async def resolve(self, host):
         if self.is_ip(host):
             host = host.replace(b'::ffff:', b'')
             return [host]
-        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < self.timeout_threshold:
+        elif host in self.dns_pool and self.dns_ttl[host] > time.time():
             return self.dns_pool[host]
         return await self.dns_query(host)
 
     async def dns_query(self, host):
         result = await self.dns_query_worker(host)
-        if result:
+        if result != None:
             self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time()
+            self.dns_ttl[host] = time.time() + self.timeout_threshold
+            return result
         else:
-            raise Exception
-        return result
+            raise Exception('No IP Error')
 
-    async def dns_query_worker(self, host):
+    async def dns_query_worker(self, host, timeout=10):
         server_writer = None
         try:
             if socket.has_dualstack_ipv6():
@@ -138,9 +156,11 @@ class ymc_dns_cache(ymc_base):
             server_reader, server_writer = await asyncio.open_connection(host=localhost, port=self.config['dns_port'])
             server_writer.write(host)
             await server_writer.drain()
-            data = await server_reader.read(65535)
+            data = await asyncio.wait_for(server_reader.read(65535), timeout)
             if data == b'None':
                 result = None
+            elif data == b'No':
+                result = []
             else:
                 result = data.split(b',')
             return result
@@ -154,7 +174,7 @@ class ymc_dns_cache(ymc_base):
         while True:
             try:
                 for x in list(self.dns_pool.keys()):
-                    if x in self.dns_ttl and (time.time() - self.dns_ttl[x]) >= self.timeout_threshold:
+                    if x in self.dns_ttl and self.dns_ttl[x] < time.time():
                         if x in self.dns_pool:
                             del self.dns_pool[x]
                         del self.dns_ttl[x]
@@ -183,11 +203,12 @@ class ymc_internet_status_cache(ymc_base):
                 server_reader, server_writer = await asyncio.open_connection(host=localhost,port=self.config['dns_port'])
                 server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
                 await server_writer.drain()
-                result = await server_reader.read(64)
-                if result == b'True':
-                    self.internet_status = True
-                else:
-                    self.internet_status = False
+                while True:
+                    result = await asyncio.wait_for(server_reader.read(64),10)
+                    if result == b'True':
+                        self.internet_status = True
+                    else:
+                        self.internet_status = False
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -221,7 +242,7 @@ class ymc_connect_remote_server(ymc_dns_cache):
         if server_reader == None or server_writer == None:
             raise Exception
 
-    def get_proxy_context(self):
+    def init_proxy_context(self):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
@@ -258,10 +279,11 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         self.white_list = self.config['white_list']
         self.black_list = self.config['black_list']
         self.HSTS_list = self.config['HSTS_list']
+        self.EXURL_list = self.config['EXURL_list']
         self.geoip_list = self.config['geoip_list']
         self.local_ip_list = self.config['local_ip_list']
         self.connection_pool = []
-        self.proxy_context = self.get_proxy_context()
+        self.proxy_context = self.init_proxy_context()
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -272,6 +294,9 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         self.loop.create_task(self.create_server())
         self.loop.create_task(self.pool())
         self.loop.create_task(self.internet_refresh_cache())
+        self.loop.create_task(self.white_list_updater())
+        self.loop.create_task(self.HSTS_list_updater())
+        self.loop.create_task(self.push_HSTS_list())
         self.loop.create_task(self.dns_clear_cache())
         self.loop.run_forever()
 
@@ -287,7 +312,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     async def handler(self, sock):
         try:
             data, URL, host, port, request_type = await self.process(sock)
-            await self.redirect(sock,host,URL)
+            await self.redirect(sock,host,URL,request_type)
             await self.proxy(host,port,request_type,data,sock,self.is_abroad(host))
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -323,7 +348,11 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
                 if scan:
                     instruction = data[:4]
                     if b'GET' in instruction or b'POST' in instruction:
-                        data = self.get_response(data)
+                        URL, host, _ = self.http_get_address_new(data, True)
+                        if not await self.redirect(reader,host,URL):
+                            data = self.get_response(data)
+                        else:
+                            continue
                 writer.write(data)
                 await writer.drain()
         except BaseException as error:
@@ -332,33 +361,18 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         finally:
             await self.clean_up(writer)
 
-    async def redirect(self, sock, host, URL):
-        try:
-            def HSTS(HSTS_list,host):
-                if host in HSTS_list:
-                    return True
-                sigment_length = len(host)
-                while True:
-                    sigment_length = host.rfind(b'.', 0, sigment_length) - 1
-                    if sigment_length <= -1:
-                        break
-                    if host[sigment_length + 1:] in HSTS_list:
-                        return True
-
-            if URL != None and HSTS(self.HSTS_list,host):
-                await self.http_response(sock, 301, URL)
-                await self.clean_up(sock)
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            raise Exception(error)
+    async def redirect(self, sock, host, URL, request_type=1):
+        if URL != None and self.host_in_it(host, self.HSTS_list) and not self.URL_in_it(URL, self.EXURL_list):
+            await self.http_response(sock, 301, URL)
+            return True
+        elif not request_type and not self.is_ip(host) and self.conclude(host) not in self.HSTS_list:
+            self.HSTS_list.add(self.conclude(host))
+        return False
 
     async def proxy(self, host, port, request_type, data, sock, abroad):
         server_reader, server_writer = None, None
         try:
             server_reader, server_writer = await self.make_proxy(host,port,data,request_type,abroad,sock)
-            if server_reader == None or server_writer == None:
-                raise Exception
             done, pending = await asyncio.wait(await self.make_switches(sock, server_reader, server_writer, request_type),return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
@@ -382,16 +396,20 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
                     except Exception as error:
                         traceback.clear_frames(error.__traceback__)
                         error.__traceback__ = None
+                else:
+                    await self.http_response(sock, 404)
+                    raise Exception('Invalid address')
         if abroad:
             server_reader, server_writer = await self.do_handshake(host, port)
-        if not request_type and server_writer:
-            await self.http_response(sock, 200)
-        elif not request_type and not server_writer:
-            await self.http_response(sock, 404)
-            raise Exception
-        elif data and server_writer:
-            server_writer.write(data)
-            await server_writer.drain()
+        if server_writer:
+            if not request_type:
+                await self.http_response(sock, 200)
+            elif data:
+                server_writer.write(data)
+                await server_writer.drain()
+        else:
+            await self.http_response(sock, 503)
+            raise Exception('Fail to connect remote server')
         return server_reader, server_writer
 
     async def get_IPs(self,host,sock):
@@ -400,9 +418,6 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         except Exception:
             await self.http_response(sock, 502)
             raise Exception('No IP Error')
-        if not IPs:
-            await self.http_response(sock, 502)
-            raise Exception
         return IPs
 
     async def do_handshake(self,host,port):
@@ -415,15 +430,17 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         await server_writer.drain()
         return server_reader, server_writer
 
-    async def http_response(self, sock,type,URL=None):
-        if type == 200:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 200 Connection Established\r\nProxy-Connection: close\r\n\r\n''')
-        elif type == 301:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
-        elif type == 404:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 404 Not Found\r\nProxy-Connection: close\r\n\r\n''')
-        elif type == 502:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 502 Bad Gateway\r\nProxy-Connection: close\r\n\r\n''')
+    async def http_response(self, sock, code, URL=None):
+        if code == 200:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 200 Connection Established\r\n\r\n''')
+        elif code == 301:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\n\r\n''')
+        elif code == 404:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n''')
+        elif code == 502:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n''')
+        elif code == 503:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n''')
         else:
             raise Exception('Unknown Status Code')
 
@@ -492,7 +509,33 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     async def white_list_updater(self):
         while True:
             try:
-                self.white_list = self.white_list.union(await self.config['pipes'][self.ID][0].coro_recv())
+                self.white_list = self.white_list.union(await self.config['pipes_wl'][self.ID][0].coro_recv())
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
+                await self.sleep(60)
+
+    async def HSTS_list_updater(self):
+        while True:
+            try:
+                self.HSTS_list = self.HSTS_list.union(await self.config['pipes_hs'][self.ID][0].coro_recv())
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
+                await self.sleep(60)
+
+    async def push_HSTS_list(self):
+        self.HSTS_list_old = self.HSTS_list.copy()
+        while True:
+            try:
+                difference = self.HSTS_list.symmetric_difference(self.HSTS_list_old)
+                if difference:
+                    for x in self.config['pipes_hs'].keys():
+                        if x != self.ID:
+                            await self.config['pipes_hs'][x][1].coro_send(difference)
+                    self.HSTS_list_old = self.HSTS_list.copy()
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -502,7 +545,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     async def process(self, sock):
         data = await asyncio.wait_for(self.loop.sock_recv(sock, 65535), 20)
         if data == b'':
-            raise Exception
+            raise Exception('Tunnel Timeout')
         request_type = self.get_request_type(data)
         if request_type == 3:
             host, port = await self.socks5_get_address(sock)
@@ -551,21 +594,21 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     def http_get_address_new(data, request_type, get_url=True):
         host, port, URL = None, None, None
         position = data.find(b' ') + 1
-        sigment = data[position:data.find(b' ', position)]
-        if request_type and get_url:
-            URL = sigment.replace(b'http', b'https', 1)
+        segment = data[position:data.find(b' ', position)]
+        if request_type and get_url and segment[0:4] == b'http':
+            URL = segment.replace(b'http', b'https', 1)
         position = data.find(b'Host: ') + 6
         if position <= 5:
             return None, None, None
-        sigment = data[position:data.find(b'\r\n', position)]
-        if b':' in sigment:
-            port = sigment[sigment.rfind(b':') + 1:]
-            host = sigment[:sigment.rfind(b':')]
+        segment = data[position:data.find(b'\r\n', position)]
+        if b':' in segment:
+            port = segment[segment.rfind(b':') + 1:]
+            host = segment[:segment.rfind(b':')]
         elif request_type == 0:
-            host = sigment
+            host = segment
             port = b'443'
         else:
-            host = sigment
+            host = segment
             port = b'80'
         return URL, host, port
 
@@ -573,18 +616,18 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     def http_get_address_old(data, request_type):
         host, port, URL = None, None, None
         position = data.find(b' ') + 1
-        sigment = data[position:data.find(b' ', position)]
+        segment = data[position:data.find(b' ', position)]
+        if request_type and segment[0:4] == b'http':
+            URL = segment.replace(b'http', b'https', 1)
         if request_type:
-            URL = sigment.replace(b'http', b'https', 1)
-        if request_type:
-            position = sigment.find(b'//') + 2
-            sigment = sigment[position:sigment.find(b'/', position)]
-        position = sigment.rfind(b':')
-        if position > 0 and position > sigment.rfind(b']'):
-            host = sigment[:position]
-            port = sigment[position + 1:]
+            position = segment.find(b'//') + 2
+            segment = segment[position:segment.find(b'/', position)]
+        position = segment.rfind(b':')
+        if position > 0 and position > segment.rfind(b']'):
+            host = segment[:position]
+            port = segment[position + 1:]
         else:
-            host = sigment
+            host = segment
             port = b'80'
         host = host.replace(b'[', b'', 1)
         host = host.replace(b']', b'', 1)
@@ -617,12 +660,25 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     def host_in_it(host, var):
         if host in var:
             return True
-        sigment_length = len(host)
-        while 1:
-            sigment_length = host.rfind(b'.', 0, sigment_length) - 1
-            if sigment_length <= -1:
+        segment_length = len(host)
+        while True:
+            segment_length = host.rfind(b'.', 0, segment_length) - 1
+            if segment_length <= -1:
                 break
-            if host[sigment_length + 1:] in var:
+            if host[segment_length + 1:] in var:
+                return True
+        return False
+
+    @staticmethod
+    def URL_in_it(URL, var):
+        URL = URL.replace(b'http://', b'', 1)
+        URL = URL.replace(b'https://', b'', 1)
+        segment_length = 0
+        while True:
+            segment_length = URL.find(b'/', segment_length + 1)
+            if segment_length <= -1:
+                break
+            if URL[:segment_length] in var or URL[:segment_length] + b'/' in var:
                 return True
         return False
 
@@ -641,6 +697,18 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
             elif var[mid][0] > ip:
                 right = mid - 1
         return False
+
+    @staticmethod
+    def conclude(data):
+        def detect(data):
+            if data.count(b'.') > 1:
+                return True
+            return False
+
+        if detect(data):
+            return data[data.find(b'.'):]
+        else:
+            return data
 
     def is_china_ip(self, ip):
         return self.ip_in_it(ip,self.geoip_list)
@@ -669,8 +737,11 @@ class yashmak_dns(ymc_base):
         self.dns_pool = dict()
         self.dns_ttl = dict()
         self.dns_hit_record = dict()
+        self.dns_processing = set()
         self.ipv4 = True
         self.ipv6 = True
+        self.total_query = 0
+        self.total_failure_query = 0
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -698,17 +769,22 @@ class yashmak_dns(ymc_base):
             host = await asyncio.wait_for(client_reader.read(65535), 20)
             if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
                 dns_record = await self.auto_resolve(host)
-                if dns_record:
+                if dns_record and dns_record != [None]:
                     dns_record = str(dns_record).encode('utf-8')[3:-2]
                     dns_record = dns_record.replace(b"b'",b"")
                     dns_record = dns_record.replace(b"'",b"")
                     dns_record = dns_record.replace(b" ",b"")
                     client_writer.write(dns_record)
+                elif dns_record == [None]:
+                    client_writer.write(b'No')
                 else:
                     client_writer.write(b'None')
+                await client_writer.drain()
             else:
-                client_writer.write(str(self.has_internet()).encode('utf-8'))
-            await client_writer.drain()
+                while True:
+                    client_writer.write(str(self.has_internet()).encode('utf-8'))
+                    await client_writer.drain()
+                    await self.sleep(1)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -748,16 +824,21 @@ class yashmak_dns(ymc_base):
         return False
 
     async def internet_refresh_cache(self):
+        self.internet_failure_counter = 0
         while True:
             s = time.time()
             try:
                 await asyncio.gather(self.has_ipv4(), self.has_ipv6())
+                if not self.ipv4 and not self.ipv6:
+                    self.internet_failure_counter += 1
+                else:
+                    self.internet_failure_counter = 0
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                if time.time() - s < 1:
-                    await self.sleep(1)
+                if time.time() - s < 3:
+                    await self.sleep(3)
 
     @staticmethod
     def is_ipv6(ip):
@@ -783,9 +864,10 @@ class yashmak_dns(ymc_base):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host not in self.dns_pool or (host in self.dns_ttl and time.time() >= self.dns_ttl[host]):
-            # await self.wait_until_has_internet()
+        elif host not in self.dns_processing and (host not in self.dns_pool or (host in self.dns_ttl and time.time() >= self.dns_ttl[host] + 480)):
+            await self.wait_until_has_internet()
             await self.dns_query(host, doh)
+        await self.wait_until_has_record(host)
         if host in self.dns_pool:
             self.dns_hit_record[host] = time.time() + 3600
             if q_type != 'ALL':
@@ -796,10 +878,13 @@ class yashmak_dns(ymc_base):
             return []
 
     async def dns_query(self,host,doh):
-        for timeout in [1,1,2,4]:
+        self.dns_processing.add(host)
+        for timeout in [0.5,1,1,2,4]:
+            self.total_query += 1
             ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', doh, timeout=timeout), self.dns_query_worker(host, 'AAAA', doh, timeout=timeout))
             if ipv4 or ipv6:
                 break
+            self.total_failure_query += 1
         if not ipv4 and not ipv6:
             ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', not doh), self.dns_query_worker(host, 'AAAA', not doh))
             if ipv4 or ipv6:
@@ -812,6 +897,7 @@ class yashmak_dns(ymc_base):
             result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time() + min(ipv4[1], ipv6[1])
+        self.dns_processing.remove(host)
 
     async def dns_query_worker(self, host, q_type, doh, dns_server=None, timeout=5):
         try:
@@ -824,7 +910,11 @@ class yashmak_dns(ymc_base):
                     x.cancel()
                 results = []
                 for x in range(len(done)):
-                    results.append(done.pop().result())
+                    result = done.pop().result()
+                    if result:
+                        results.append(result)
+                if not results:
+                    return None
                 return self.dns_decode(results, q_type)
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
@@ -838,55 +928,64 @@ class yashmak_dns(ymc_base):
                 mq_type = 28
             else:
                 raise Exception
-            query = message.make_query(host.decode('utf-8'), mq_type)
-            query = query.to_wire()
             tasks = []
             if doh:
-                tasks += await self.dns_make_doh_tasks(query, dns_server)
+                tasks += await self.dns_make_doh_tasks(host, mq_type, dns_server)
             else:
-                tasks += self.dns_make_normal_tasks(query, dns_server, timeout)
+                tasks += self.dns_make_normal_tasks(host, mq_type, dns_server, timeout)
             return tasks
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def dns_make_doh_tasks(self, query, dns_server):
+    async def dns_make_doh_tasks(self, host, mq_type, dns_server):
         tasks = []
         for x in self.config['doh_dns']:
             if self.ipv4 and dns_server['ipv4']:
                 v4 = await self.resolve('A', x, False)
                 if v4:
-                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, (v4[0], 443), x)))
+                    query = message.make_query(host.decode('utf-8'), mq_type)
+                    ID = query.id
+                    query = query.to_wire()
+                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v4[0], 443), x)))
             if self.ipv6 and dns_server['ipv6']:
                 v6 = await self.resolve('AAAA', x, False)
                 if v6:
-                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, (v6[0], 443), x)))
+                    query = message.make_query(host.decode('utf-8'), mq_type)
+                    ID = query.id
+                    query = query.to_wire()
+                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v6[0], 443), x)))
         return tasks
 
-    def dns_make_normal_tasks(self, query, dns_server, timeout):
+    def dns_make_normal_tasks(self, host, mq_type, dns_server, timeout):
         tasks = []
         for x in self.config['normal_dns']:
             if ((not self.ipv4 and (self.ipv4 or self.ipv6)) or not dns_server['ipv4']) and not self.is_ipv6(x):
                 continue
             if ((not self.ipv6 and (self.ipv4 or self.ipv6)) or not dns_server['ipv6']) and self.is_ipv6(x):
                 continue
-            tasks.append(asyncio.create_task(self.dns_make_normal_query(query, (x, 53), timeout)))
+            query = message.make_query(host.decode('utf-8'), mq_type)
+            ID = query.id
+            query = query.to_wire()
+            tasks.append(asyncio.create_task(self.dns_make_normal_query(query, ID, (x, 53), timeout)))
         return tasks
 
-    async def dns_make_normal_query(self, query, address, timeout):
+    async def dns_make_normal_query(self, query, ID, address, timeout):
         s = None
         try:
             if self.is_ipv6(address[0]):
                 s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
             else:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setblocking(False)
             await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
             await self.loop.sock_sendall(s, query)
+            await self.loop.sock_sendall(s, query)
             try:
-                result = await asyncio.wait_for(self.loop.sock_recv(s, 16384), timeout)
+                result = await asyncio.wait_for(self.loop.sock_recv(s, 512), timeout)
             except asyncio.exceptions.TimeoutError:
                 raise Exception('timeout')
-            return result
+            return result, ID
         except Exception as error:
             if str(error) != 'timeout':
                 await self.sleep(timeout)
@@ -895,7 +994,7 @@ class yashmak_dns(ymc_base):
         finally:
             await self.clean_up(s)
 
-    async def dns_make_doh_query(self, query, address, hostname):
+    async def dns_make_doh_query(self, query, ID, address, hostname):
         server_writer = None
         try:
             server_reader, server_writer = await asyncio.open_connection(host=address[0],port=address[1],ssl=self.normal_context,server_hostname=hostname,ssl_handshake_timeout=2)
@@ -903,7 +1002,7 @@ class yashmak_dns(ymc_base):
             await server_writer.drain()
             result = await asyncio.wait_for(server_reader.read(16384),2)
             result = result[result.find(b'\r\n\r\n')+4:]
-            return result
+            return result, ID
         except Exception as error:
             await self.sleep(4)
             traceback.clear_frames(error.__traceback__)
@@ -913,29 +1012,45 @@ class yashmak_dns(ymc_base):
 
     @staticmethod
     def dns_decode(results, q_type):
-        def decoder(result, q_type, len_q_type):
-            result = str(message.from_wire(result))
+        def decoder(result, ID, q_type, len_q_type):
             IPs, TTLs = [], []
+            result = message.from_wire(result)
+            rcode = result.rcode()
+            if result.id != ID:
+                raise Exception
+            if rcode == 3 or rcode == 2:
+                return [None], 3600
+            elif rcode != 0:
+                return [], 2147483647
+            result = result.answer
+            if not result:
+                return [], 2147483647
+            result = str(result.pop()) + '\n'
             position = result.find(q_type)
             if position < 0:
-                return []
+                return [], 2147483647
             while position > 0:
                 TTLs.append(int(result[result.find(' ', position - 10) + 1:position]))
                 IPs.append(result[position + len_q_type:result.find('\n', position)].encode('utf-8'))
                 position = result.find(q_type, position + len_q_type)
             TTLs.sort()
+            if TTLs[0] < 120:
+                TTLs[0] = 120
             return IPs, TTLs[0]
 
         q_type = ' IN ' + q_type.upper() + ' '
         len_q_type = len(q_type)
+        IPs, TTL = [], 2147483647
         for x in results:
             try:
-                if x:
-                    IPs, TTL = decoder(x, q_type, len_q_type)
-                    return IPs, TTL
+                IPs, TTL = decoder(x[0], x[1], q_type, len_q_type)
+                if not IPs:
+                    continue
+                break
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+        return IPs, TTL
 
     async def dns_refresh_cache(self):
         while True:
@@ -944,20 +1059,22 @@ class yashmak_dns(ymc_base):
                 if self.has_internet():
                     refreshable = []
                     for x in list(self.dns_pool.keys()):
-                        if x in self.dns_ttl and time.time() >= self.dns_ttl[x] > 0:
+                        if x in self.dns_ttl and time.time() >= self.dns_ttl[x]:
                             refreshable.append(x)
+                    # print(refreshable)
                     await self.dns_refresh_cache_worker(refreshable)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                if time.time() - s < 1:
-                    await self.sleep(1)
+                if time.time() - s < 5:
+                    await self.sleep(5)
 
     async def dns_refresh_cache_worker(self, refreshable):
         for x in refreshable:
             await self.wait_until_has_internet()
-            self.loop.create_task(self.dns_query(x, self.dns_pool[x]['doh']))
+            await self.wait_until_has_record(x)
+            await self.dns_query(x, self.dns_pool[x]['doh'])
 
     async def dns_clear_cache(self):
         while True:
@@ -976,8 +1093,16 @@ class yashmak_dns(ymc_base):
                 await self.sleep(60)
 
     async def wait_until_has_internet(self):
-        while not self.has_internet():
+        e = time.time() + 5
+        while self.internet_failure_counter > 5 and time.time() < e:
             await self.sleep(0.5)
+
+    async def wait_until_has_record(self, host):
+        if host in self.dns_processing:
+            e = time.time() + 5
+            while host not in self.dns_pool and time.time() < e:
+                # print('wait record', host)
+                await self.sleep(0.02)
 
     def exception_handler(self, loop, context):
         pass
@@ -998,8 +1123,9 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
         gc.set_threshold(100000, 50, 50)
         self.config = config
         self.white_list = self.config['white_list']
+        self.HSTS_list = self.config['HSTS_list']
         self.backup(self.config['white_list_path'], 'old.json')
-        self.proxy_context = self.get_proxy_context()
+        self.proxy_context = self.init_proxy_context()
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -1008,6 +1134,7 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
         self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.white_list_updater())
+        self.loop.create_task(self.HSTS_list_updater())
         self.loop.create_task(self.internet_refresh_cache())
         self.loop.create_task(self.dns_clear_cache())
         self.loop.run_forever()
@@ -1023,16 +1150,19 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
                             data = json.load(file)
                     else:
                         data = []
-                    customize = json.loads(gzip.decompress(customize))
-                    data += customize
-                    for x in list(map(self.encode, customize)):
-                        self.white_list.add(x.replace(b'*', b''))
                     data = list(set(data))
-                    self.backup(self.config['white_list_path'],'chinalist.json')
-                    await asyncio.sleep(1)
-                    with open(self.config['white_list_path'], 'w') as file:
-                        json.dump(data, file)
-                    self.push_white_list()
+                    len_data_old = len(data)
+                    data += customize
+                    data = list(set(data))
+                    if len_data_old != len(data):
+                        for x in list(map(self.encode, customize)):
+                            self.white_list.add(x.replace(b'*', b''))
+                        self.backup(self.config['white_list_path'], 'chinalist.json')
+                        await asyncio.sleep(1)
+                        with open(self.config['white_list_path'], 'w') as file:
+                            json.dump(data, file)
+                            file.flush()
+                        await self.push_white_list()
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -1053,7 +1183,7 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
                 if data == b'' or data == b'\n':
                     break
                 customize += data
-            return customize
+            return json.loads(gzip.decompress(customize))
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
@@ -1068,10 +1198,31 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
                 bkfile.write(ofile.read())
                 bkfile.flush()
 
-    def push_white_list(self):
+    async def push_white_list(self):
         difference = self.white_list.symmetric_difference(self.white_list_old)
-        for x in self.config['pipes'].keys():
-            self.config['pipes'][x][1].send(difference)
+        for x in self.config['pipes_wl'].keys():
+            await self.config['pipes_wl'][x][1].coro_send(difference)
+
+    async def HSTS_list_updater(self):
+        while True:
+            try:
+                data = await self.config['pipes_hs'][self.config['worker']][0].coro_recv()
+                self.HSTS_list = self.HSTS_list.union(data)
+                HSTS = []
+                for x in list(map(self.decode, self.HSTS_list)):
+                    if x[0] == '.':
+                        HSTS.append('*'+x)
+                    else:
+                        HSTS.append(x)
+                HSTS = list(map(self.base64_encode, HSTS))
+                with open(self.config['HSTS_list_path'], 'w') as file:
+                    json.dump(HSTS,file)
+                    file.flush()
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
+                await self.sleep(60)
 
     def exception_handler(self, loop, context):
         pass
@@ -1080,7 +1231,7 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
 class yashmak_load_balancer(ymc_base):
     def __init__(self, config, response):
         try:
-            #print(os.getpid(),'lb')
+            # print(os.getpid(),'lb')
             self.init(config, response)
         except Exception as error:
             response.put("yashmak_load_balancer:"+str(error))
@@ -1107,6 +1258,7 @@ class yashmak_load_balancer(ymc_base):
             try:
                 for x in range(self.config['worker']):
                     sock, _ = await self.loop.sock_accept(self.listener)
+                    sock.setblocking(False)
                     await self.config['pipes_sock'][x][1].coro_send(sock)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
@@ -1129,12 +1281,12 @@ class yashmak_load_balancer(ymc_base):
 class yashmak_daemon(ymc_internet_status_cache):
     def __init__(self, command, response):
         try:
-            #print(os.getpid(),'daemon')
+            # print(os.getpid(),'daemon')
             super().__init__()
             self.init(command, response)
         except Exception as error:
             if "yashmak_" not in str(error):
-                response.put("yashmak_load_balancer:"+str(error))
+                response.put("yashmak_daemon:"+str(error))
             else:
                 response.put(str(error))
             traceback.clear_frames(error.__traceback__)
@@ -1161,6 +1313,7 @@ class yashmak_daemon(ymc_internet_status_cache):
         self.loop.create_task(self.accept_command())
         self.loop.create_task(self.send_feedback())
         self.loop.create_task(self.check_parent())
+        self.loop.create_task(self.check_children())
         self.loop.create_task(self.internet_refresh_cache())
         self.loop.run_forever()
 
@@ -1206,6 +1359,7 @@ class yashmak_daemon(ymc_internet_status_cache):
             self.config[self.config['active']]['white_list_path'] = self.config_path + self.config['white_list']
             self.config[self.config['active']]['black_list_path'] = self.config_path + self.config['black_list']
             self.config[self.config['active']]['HSTS_list_path'] = self.config_path + self.config['HSTS_list']
+            self.config[self.config['active']]['EXURL_list_path'] = self.config_path + self.config['EXURL_list']
             self.config[self.config['active']]['geoip_list_path'] = self.config_path + self.config['geoip_list']
             self.config[self.config['active']]['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
             self.config[self.config['active']]['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
@@ -1216,28 +1370,37 @@ class yashmak_daemon(ymc_internet_status_cache):
             self.config['uuid'] = self.enhanced_base64_decode(self.config['uuid'])
             self.config['listen'] = int(self.config['listen'])
         else:
-            example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS_list': '', 'geoip_list': '',
+            example = {'version': '','startup': '', 'mode': '', 'active': '', 'white_list': '', 'black_list': '', 'HSTS2_list': '', 'EXURL_list': '','geoip_list': '',
                        'normal_dns': [''], 'doh_dns': [''], 'worker': '', 'server01': {'cert': '', 'host': '', 'port': '', 'uuid': '', 'listen': ''}}
             with open(self.config_path + 'config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
     def load_exception_list(self):
-        def load_list(location, var, func):
-            if location != '':
+        def load_list(location, var, funcs, replace):
+            if location and not os.path.exists(location):
+                with open(location, 'w') as file:
+                    json.dump([],file)
+                    file.flush()
+            if location:
                 with open(location, 'r') as file:
                     data = json.load(file)
-                data = list(map(func, data))
+                for func in funcs:
+                    data = list(map(func, data))
                 for x in data:
-                    var.add(x.replace(b'*', b''))
+                    for y in replace:
+                        x = x.replace(y[0], y[1], y[2])
+                    var.add(x)
 
         self.white_list = set()
         self.black_list = set()
         self.HSTS_list = set()
+        self.EXURL_list = set()
         self.geoip_list = []
         self.local_ip_list = []
-        load_list(self.config['white_list_path'], self.white_list, self.encode)
-        load_list(self.config['black_list_path'], self.black_list, self.encode)
-        load_list(self.config['HSTS_list_path'], self.HSTS_list, self.encode)
+        load_list(self.config['white_list_path'], self.white_list, [self.encode], [(b'*', b'', 1)])
+        load_list(self.config['black_list_path'], self.black_list, [self.encode], [(b'*', b'', 1)])
+        load_list(self.config['HSTS_list_path'], self.HSTS_list, [self.encode, self.base64_decode], [(b'*', b'', 1)])
+        load_list(self.config['EXURL_list_path'], self.EXURL_list, [self.encode], [])
         with open(self.config['geoip_list_path'], 'r') as file:
             data = json.load(file)
         for x in data:
@@ -1251,16 +1414,19 @@ class yashmak_daemon(ymc_internet_status_cache):
         self.config['white_list'] = self.white_list
         self.config['black_list'] = self.black_list
         self.config['HSTS_list'] = self.HSTS_list
+        self.config['EXURL_list'] = self.EXURL_list
         self.config['geoip_list'] = self.geoip_list
         self.config['local_ip_list'] = self.local_ip_list
 
     def create_pipes(self):
-        self.config['pipes'] = dict()
-        for x in range(self.config['worker']):
-            self.config['pipes'][x] = (aioprocessing.AioPipe(False))
+        self.config['pipes_wl'] = dict()
+        self.config['pipes_hs'] = dict()
         self.config['pipes_sock'] = dict()
         for x in range(self.config['worker']):
+            self.config['pipes_wl'][x] = (aioprocessing.AioPipe(False))
+            self.config['pipes_hs'][x] = (aioprocessing.AioPipe(False))
             self.config['pipes_sock'][x] = (aioprocessing.AioPipe(False))
+        self.config['pipes_hs'][self.config['worker']] = (aioprocessing.AioPipe(False))
 
     def find_ports(self):
         ports = set()
@@ -1301,9 +1467,23 @@ class yashmak_daemon(ymc_internet_status_cache):
                 self.terminate_service()
                 break
             await self.sleep(5)
-        await self.loop.shutdown_asyncgens()
+        await self.suicide()
+
+    async def check_children(self):
+        await self.sleep(30)
+        all_alive = True
         while True:
-            os.kill(os.getpid(), signal.SIGTERM)
+            for x in self.service:
+                if not x.is_alive():
+                    all_alive = False
+                    break
+            if not all_alive:
+                break
+            await self.sleep(5)
+        self.terminate_service()
+        self.response.put('Panic')
+        await self.sleep(1)
+        await self.suicide()
 
     async def accept_command(self):
         while True:
@@ -1311,9 +1491,7 @@ class yashmak_daemon(ymc_internet_status_cache):
                 self.terminate_service()
                 break
             await asyncio.sleep(0.2)
-        await self.loop.shutdown_asyncgens()
-        while True:
-            os.kill(os.getpid(), signal.SIGTERM)
+        await self.suicide()
 
     async def send_feedback(self):
         counter = 0
@@ -1326,6 +1504,11 @@ class yashmak_daemon(ymc_internet_status_cache):
             else:
                 counter += 1
             await self.sleep(1)
+
+    async def suicide(self):
+        await self.loop.shutdown_asyncgens()
+        while True:
+            os.kill(os.getpid(), signal.SIGTERM)
 
     @staticmethod
     def enhanced_base64_encode(s):
@@ -1646,6 +1829,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def kill_daemon(self):
         try:
+            self.response.put('kill')
             while self.process1.is_alive():
                 self.command.put('kill')
                 time.sleep(0.2)
@@ -1702,6 +1886,9 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         while True:
             if info == 'kill':
                 break
+            elif info == 'Panic':
+                self.panic(Exception('Child Process Accidentally Exit'))
+                break
             elif info == 'OK' and self.process1.is_alive() and (not connected or not counter):
                 connected = True
                 if not counter and normal:
@@ -1751,7 +1938,10 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.pop_message('配置文件错误')
             time.sleep(2)
             raise Exception('EXIT')
-        else:
+        elif 'Child Process Accidentally Exit' in str(error):
+            self.reset_proxy()
+            self.pop_message('子进程意外退出')
+        elif str(error) != 'EXIT':
             self.exit()
             self.pop_message('未知错误')
             time.sleep(2)
@@ -1818,6 +2008,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                         '连接已中断': 'Connection terminated',
                         'Yashmak更新成功': 'Yashmak successfully updated',
                         '未知错误': 'Unknown Error',
+                        '子进程意外退出': 'Child Process Accidentally Exit',
                         '配置文件错误': 'Config Error',
                         '检测到运行中的Yashmak': 'Running Yashmak has detected',
                         '已允许UWP应用连接代理': 'UWP apps have been allowed to connect to the proxy',
