@@ -348,11 +348,12 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
                 if scan:
                     instruction = data[:4]
                     if b'GET' in instruction or b'POST' in instruction:
-                        URL, host, _ = self.http_get_address_new(data, True)
+                        request_type, offset = self.get_request_type(data)
+                        URL, host, _ = self.http_get_address_NG(data, request_type, offset)
                         if not await self.redirect(reader,host,URL):
-                            data = self.get_response(data)
+                            data = self.get_response(data, offset)
                         else:
-                            continue
+                            raise Exception
                 writer.write(data)
                 await writer.drain()
         except BaseException as error:
@@ -361,9 +362,12 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         finally:
             await self.clean_up(writer)
 
-    async def redirect(self, sock, host, URL, request_type=1):
-        if URL != None and self.host_in_it(host, self.HSTS_list) and not self.URL_in_it(URL, self.EXURL_list):
-            await self.http_response(sock, 301, URL)
+    async def redirect(self, sock, host, URL, request_type):
+        if URL and request_type and self.host_in_it(host, self.HSTS_list) and not self.URL_in_it(URL, self.EXURL_list):
+            if request_type == 1:
+                await self.http_response(sock, 301, URL)
+            elif request_type == 2:
+                await self.http_response(sock, 307, URL)
             return True
         elif not request_type and not self.is_ip(host) and self.conclude(host) not in self.HSTS_list:
             self.HSTS_list.add(self.conclude(host))
@@ -434,7 +438,9 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         if code == 200:
             await self.loop.sock_sendall(sock, b'''HTTP/1.1 200 Connection Established\r\n\r\n''')
         elif code == 301:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+        elif code == 307:
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 307 Temporary Redirect\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
         elif code == 404:
             await self.loop.sock_sendall(sock, b'''HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n''')
         elif code == 502:
@@ -546,21 +552,16 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         data = await asyncio.wait_for(self.loop.sock_recv(sock, 65535), 20)
         if data == b'':
             raise Exception('Tunnel Timeout')
-        request_type = self.get_request_type(data)
+        request_type, offset = self.get_request_type(data)
         if request_type == 3:
             host, port = await self.socks5_get_address(sock)
-            data = None
-            URL = None
+            URL, data = None, None
         elif request_type == 0:
-            URL, host, port = self.http_get_address_new(data, request_type)
-            if host == None or port == None:
-                URL, host, port = self.http_get_address_old(data, request_type)
+            URL, host, port = self.http_get_address_NG(data, request_type, offset)
             data = None
         else:
-            URL, host, port = self.http_get_address_new(data, request_type)
-            if host == None or port == None:
-                URL, host, port = self.http_get_address_old(data, request_type)
-            data = self.get_response(data)
+            URL, host, port = self.http_get_address_NG(data, request_type, offset)
+            data = self.get_response(data, offset)
         return data, URL, host, port, request_type
 
     def is_abroad(self, host):
@@ -582,55 +583,46 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
     def get_request_type(data):
         if data[:7] == b'CONNECT':
             request_type = 0
+            offset = 8
         elif data[:3] == b'GET':
             request_type = 1
+            offset = 4
         elif data[:4] == b'POST':
             request_type = 2
+            offset = 5
         else:
             request_type = 3
-        return request_type
+            offset = 0
+        return request_type, offset
 
     @staticmethod
-    def http_get_address_new(data, request_type, get_url=True):
-        host, port, URL = None, None, None
-        position = data.find(b' ') + 1
-        segment = data[position:data.find(b' ', position)]
-        if request_type and get_url and segment[0:4] == b'http':
-            URL = segment.replace(b'http', b'https', 1)
-        position = data.find(b'Host: ') + 6
-        if position <= 5:
-            return None, None, None
-        segment = data[position:data.find(b'\r\n', position)]
-        if b':' in segment:
-            port = segment[segment.rfind(b':') + 1:]
-            host = segment[:segment.rfind(b':')]
-        elif request_type == 0:
-            host = segment
-            port = b'443'
+    def http_get_address_NG(data, request_type, offset, get_url=True):
+        if not request_type:
+            host, port, URL = None, b'443', None
         else:
-            host = segment
-            port = b'80'
-        return URL, host, port
-
-    @staticmethod
-    def http_get_address_old(data, request_type):
-        host, port, URL = None, None, None
-        position = data.find(b' ') + 1
-        segment = data[position:data.find(b' ', position)]
-        if request_type and segment[0:4] == b'http':
-            URL = segment.replace(b'http', b'https', 1)
-        if request_type:
-            position = segment.find(b'//') + 2
-            segment = segment[position:segment.find(b'/', position)]
-        position = segment.rfind(b':')
-        if position > 0 and position > segment.rfind(b']'):
-            host = segment[:position]
-            port = segment[position + 1:]
+            host, port, URL = None, b'80', None
+        if data[offset] == 47:
+            offset = data.find(b'\r\nHost: ', offset) + 8
+            segment = data[offset:data.find(b'\r\n', offset)]
         else:
-            host = segment
-            port = b'80'
-        host = host.replace(b'[', b'', 1)
-        host = host.replace(b']', b'', 1)
+            segment = data[offset:data.find(b' ', offset)]
+            if request_type:
+                if segment[0] == 104 and get_url:
+                    URL = b'https' + segment[4:]
+                segment = segment[7:segment.find(b'/', 7)]
+        if segment[0] == 91:
+            offset = segment.find(b']')
+            host = segment[1:offset]
+            offset += 2
+            if offset < len(segment):
+                port = segment[offset:]
+        else:
+            offset = segment.find(b':')
+            if offset >= 0:
+                host = segment[:offset]
+                port = segment[offset + 1:]
+            else:
+                host = segment
         return URL, host, port
 
     async def socks5_get_address(self, sock):
@@ -650,9 +642,10 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         return host, port
 
     @staticmethod
-    def get_response(data):
-        data = data.replace(b'http://', b'', 1)
-        data = data[:data.find(b' ')+1]+data[data.find(b'/'):]
+    def get_response(data, offset):
+        if data[offset] != 47:
+            data = data.replace(b'http://', b'', 1)
+            data = data[:data.find(b' ') + 1] + data[data.find(b'/', 7):]
         data = data.replace(b'Proxy-', b'', 1)
         return data
 
