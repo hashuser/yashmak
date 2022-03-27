@@ -706,6 +706,8 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
             return False
 
         if detect(data):
+            if data[:4] == b'www.':
+                return data[4:]
             return data[data.find(b'.'):]
         else:
             return data
