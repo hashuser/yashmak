@@ -350,10 +350,10 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
                     if b'GET' in instruction or b'POST' in instruction:
                         request_type, offset = self.get_request_type(data)
                         URL, host, _ = self.http_get_address_NG(data, request_type, offset)
-                        if not await self.redirect(reader,host,URL):
+                        if not await self.redirect(reader,host,URL,request_type):
                             data = self.get_response(data, offset)
                         else:
-                            raise Exception
+                            continue
                 writer.write(data)
                 await writer.drain()
         except BaseException as error:
@@ -366,7 +366,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         if URL and request_type and self.host_in_it(host, self.HSTS_list) and not self.URL_in_it(URL, self.EXURL_list):
             if request_type == 1:
                 await self.http_response(sock, 301, URL)
-            elif request_type == 2:
+            else:
                 await self.http_response(sock, 307, URL)
             return True
         elif not request_type and not self.is_ip(host) and self.conclude(host) not in self.HSTS_list:
@@ -438,9 +438,9 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         if code == 200:
             await self.loop.sock_sendall(sock, b'''HTTP/1.1 200 Connection Established\r\n\r\n''')
         elif code == 301:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\n\r\n''')
         elif code == 307:
-            await self.loop.sock_sendall(sock, b'''HTTP/1.1 307 Temporary Redirect\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
+            await self.loop.sock_sendall(sock, b'''HTTP/1.1 307 Temporary Redirect\r\nLocation: ''' + URL + b'''\r\n\r\n''')
         elif code == 404:
             await self.loop.sock_sendall(sock, b'''HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n''')
         elif code == 502:
