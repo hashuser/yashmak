@@ -123,6 +123,152 @@ class ymc_base:
             return False
 
 
+class ymc_dns_parser:
+    def dns_decoder(self, data, mq_type, ID, fast_mode=True):
+        if fast_mode:
+            return self._dns_decoder_fast(data, mq_type, ID)
+        return self._dns_decoder_debug(data, mq_type, ID)
+
+    def _dns_decoder_fast(self, data, mq_type, ID):
+        result = dict()
+        result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if result['ID'] != ID:
+            return {'error':-1}
+        result['flags'] = self._dns_get_flags_fast(data)
+        if result['flags']['rcode'] == 3:
+            return {'error':3}
+        elif result['flags']['rcode']:
+            return {'error':result['flags']['rcode']}
+        position = data.find(b'\xc0\x0c', 12)
+        if position == -1:
+            result['answers'] = []
+            result['error'] = None
+            return result
+        raw_answer = data[position:]
+        result['answers'] = self._dns_get_answers_fast(raw_answer,mq_type)
+        result['error'] = None
+        return result
+
+    def _dns_decoder_debug(self, data, mq_type, ID):
+        result = dict()
+        result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if result['ID'] != ID:
+            return {'error':-1}
+        result['flags'] = self._dns_get_flags_debug(data)
+        if result['flags']['rcode'] == 3:
+            return {'error':3}
+        elif result['flags']['rcode']:
+            return {'error':result['flags']['rcode']}
+        result['questions'] = int.from_bytes(data[4:6], 'big', signed=False)
+        result['answer_rrs'] = int.from_bytes(data[6:8], 'big', signed=False)
+        result['authority_rrs'] = int.from_bytes(data[8:10], 'big', signed=False)
+        result['additional_rrs'] = int.from_bytes(data[10:12], 'big', signed=False)
+        position = data.find(b'\xc0\x0c', 12)
+        if position == -1:
+            result['answers'] = []
+            result['queries'] = b''
+            result['error'] = None
+            return result
+        raw_queries = data[12:position]
+        result['queries'] = raw_queries
+        raw_answer = data[position:]
+        result['answers'] = self._dns_get_answers_debug(raw_answer,mq_type)
+        result['error'] = None
+        return result
+
+    @staticmethod
+    def _dns_get_answers_fast(raw_answer,mq_type):
+        answers, len_raw_answer, pe = [], len(raw_answer), 0
+        while True:
+            ps = pe + 10
+            if ps > len_raw_answer:
+                break
+            pe = ps + 2 + int.from_bytes(raw_answer[ps:ps + 2], 'big', signed=False)
+            q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
+            if mq_type == q_type:
+                if q_type == 1:
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                elif q_type == 28:
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                else:
+                    rdata = raw_answer[ps - 10:pe][12:]
+                q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
+                answers.append({'q_ttl': q_ttl, 'rdata': rdata})
+        return answers
+
+    @staticmethod
+    def _dns_get_answers_debug(raw_answer,mq_type):
+        answers, len_raw_answer, pe = [], len(raw_answer), 0
+        while True:
+            ps = pe + 10
+            if ps > len_raw_answer:
+                break
+            pe = ps + 2 + int.from_bytes(raw_answer[ps:ps + 2], 'big', signed=False)
+            q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
+            if mq_type == q_type:
+                if q_type == 1:
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                elif q_type == 28:
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                else:
+                    rdata = raw_answer[ps - 10:pe][12:]
+                q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
+                q_class = int.from_bytes(raw_answer[ps - 10:pe][4:6], 'big', signed=False)
+                answers.append({'q_type': q_type, 'q_class': q_class, 'q_ttl': q_ttl, 'rdata': rdata})
+        return answers
+
+    @staticmethod
+    def _dns_get_flags_fast(data):
+        flags = dict()
+        raw_flags = bin(int.from_bytes(data[2:4], 'big', signed=False))
+        if raw_flags[2] == '1':
+            flags['QR'] = True
+        else:
+            flags['QR'] = False
+        flags['rcode'] = int(raw_flags[14:], 2)
+        return flags
+
+    @staticmethod
+    def _dns_get_flags_debug(data):
+        flags = dict()
+        raw_flags = bin(int.from_bytes(data[2:4], 'big', signed=False))
+        if raw_flags[2] == '1':
+            flags['QR'] = True
+        else:
+            flags['QR'] = False
+        flags['opcode'] = int(raw_flags[3:7], 2)
+        if raw_flags[7] == '1':
+            flags['AA'] = True
+        else:
+            flags['AA'] = False
+        if raw_flags[8] == '1':
+            flags['TC'] = True
+        else:
+            flags['TC'] = False
+        if raw_flags[9] == '1':
+            flags['RD'] = True
+        else:
+            flags['RD'] = False
+        if raw_flags[10] == '1':
+            flags['RA'] = True
+        else:
+            flags['RA'] = False
+        if raw_flags[11] == '1':
+            flags['Z'] = True
+        else:
+            flags['Z'] = False
+        if raw_flags[12] == '1':
+            flags['AD'] = True
+        else:
+            flags['AD'] = False
+        if raw_flags[13] == '1':
+            flags['CD'] = True
+        else:
+            flags['CD'] = False
+        flags['rcode'] = int(raw_flags[14:], 2)
+        return flags
+
+
 class ymc_dns_cache(ymc_base):
     def __init__(self):
         self.dns_pool = dict()
@@ -715,7 +861,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache):
         pass
 
 
-class yashmak_dns(ymc_base):
+class yashmak_dns(ymc_base,ymc_dns_parser):
     def __init__(self, config, response):
         try:
             #print(os.getpid(),'dns')
@@ -898,7 +1044,13 @@ class yashmak_dns(ymc_base):
         try:
             if dns_server is None:
                 dns_server = {'ipv4': True, 'ipv6': True}
-            tasks = await self.dns_make_tasks(host, q_type, doh, dns_server, timeout)
+            if q_type == 'A':
+                mq_type = 1
+            elif q_type == 'AAAA':
+                mq_type = 28
+            else:
+                raise Exception
+            tasks = await self.dns_make_tasks(host, mq_type, doh, dns_server, timeout)
             if tasks:
                 done, pending, = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for x in pending:
@@ -910,19 +1062,27 @@ class yashmak_dns(ymc_base):
                         results.append(result)
                 if not results:
                     return None
-                return self.dns_decode(results, q_type)
+                for x in results:
+                    result = self.dns_decoder(x[0],mq_type,x[1])
+                    if result['error'] == None and result['answers']:
+                        IPs, TTLs = [], []
+                        for y in result['answers']:
+                            IPs.append(y['rdata'])
+                            TTLs.append(y['q_ttl'])
+                        if TTLs[0] < 120:
+                            TTL = 120
+                        else:
+                            TTL = TTLs[0]
+                        return IPs, TTL
+                    elif result['error'] == 3 or result['error'] == 2:
+                        return [None], 3600
+            return None
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def dns_make_tasks(self, host, q_type, doh, dns_server, timeout):
+    async def dns_make_tasks(self, host, mq_type, doh, dns_server, timeout):
         try:
-            if q_type == 'A':
-                mq_type = 1
-            elif q_type == 'AAAA':
-                mq_type = 28
-            else:
-                raise Exception
             tasks = []
             if doh:
                 tasks += await self.dns_make_doh_tasks(host, mq_type, dns_server)
@@ -1004,48 +1164,6 @@ class yashmak_dns(ymc_base):
             error.__traceback__ = None
         finally:
             await self.clean_up(server_writer)
-
-    @staticmethod
-    def dns_decode(results, q_type):
-        def decoder(result, ID, q_type, len_q_type):
-            IPs, TTLs = [], []
-            result = message.from_wire(result)
-            rcode = result.rcode()
-            if result.id != ID:
-                raise Exception
-            if rcode == 3 or rcode == 2:
-                return [None], 3600
-            elif rcode != 0:
-                return [], 2147483647
-            result = result.answer
-            if not result:
-                return [], 2147483647
-            result = str(result.pop()) + '\n'
-            position = result.find(q_type)
-            if position < 0:
-                return [], 2147483647
-            while position > 0:
-                TTLs.append(int(result[result.find(' ', position - 10) + 1:position]))
-                IPs.append(result[position + len_q_type:result.find('\n', position)].encode('utf-8'))
-                position = result.find(q_type, position + len_q_type)
-            TTLs.sort()
-            if TTLs[0] < 120:
-                TTLs[0] = 120
-            return IPs, TTLs[0]
-
-        q_type = ' IN ' + q_type.upper() + ' '
-        len_q_type = len(q_type)
-        IPs, TTL = [], 2147483647
-        for x in results:
-            try:
-                IPs, TTL = decoder(x[0], x[1], q_type, len_q_type)
-                if not IPs:
-                    continue
-                break
-            except Exception as error:
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-        return IPs, TTL
 
     async def dns_refresh_cache(self):
         while True:
