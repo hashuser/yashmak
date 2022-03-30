@@ -1,5 +1,4 @@
 from PyQt6 import QtWidgets, QtGui, QtCore
-from dns import message
 import aioprocessing
 import threading
 import asyncio
@@ -131,10 +130,15 @@ class ymc_dns_parser:
 
     def _dns_decoder_fast(self, data, mq_type, ID):
         result = dict()
-        result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if isinstance(ID,bytes):
+            result['ID'] = data[:2]
+        else:
+            result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
         if result['ID'] != ID:
             return {'error':-1}
         result['flags'] = self._dns_get_flags_fast(data)
+        if not result['flags']['QR']:
+            return {'error':-1}
         if result['flags']['rcode'] == 3:
             return {'error':3}
         elif result['flags']['rcode']:
@@ -151,10 +155,15 @@ class ymc_dns_parser:
 
     def _dns_decoder_debug(self, data, mq_type, ID):
         result = dict()
-        result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if isinstance(ID, bytes):
+            result['ID'] = data[:2]
+        else:
+            result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
         if result['ID'] != ID:
             return {'error':-1}
         result['flags'] = self._dns_get_flags_debug(data)
+        if not result['flags']['QR']:
+            return {'error':-1}
         if result['flags']['rcode'] == 3:
             return {'error':3}
         elif result['flags']['rcode']:
@@ -267,6 +276,26 @@ class ymc_dns_parser:
             flags['CD'] = False
         flags['rcode'] = int(raw_flags[14:], 2)
         return flags
+
+    def dns_encoder(self, host, mq_type, fast_mode=True):
+        if fast_mode:
+            return self._make_query_fast(host, mq_type)
+        return False
+
+    @staticmethod
+    def _make_query_fast(host, mq_type):
+        ID = random.randbytes(2)
+        queries = ID + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+        host = host.split(b'.')
+        for x in host:
+            queries += int.to_bytes(len(x), 1, 'big', signed=False) + x
+        if mq_type == 1:
+            queries += b'\x00\x00\x01\x00\x01'
+        elif mq_type == 28:
+            queries += b'\x00\x00\x1c\x00\x01'
+        elif mq_type == 5:
+            queries += b'\x00\x00\x05\x00\x01'
+        return queries, ID
 
 
 class ymc_dns_cache(ymc_base):
@@ -1099,16 +1128,12 @@ class yashmak_dns(ymc_base,ymc_dns_parser):
             if self.ipv4 and dns_server['ipv4']:
                 v4 = await self.resolve('A', x, False)
                 if v4:
-                    query = message.make_query(host.decode('utf-8'), mq_type)
-                    ID = query.id
-                    query = query.to_wire()
+                    query, ID = self.dns_encoder(host,mq_type)
                     tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v4[0], 443), x)))
             if self.ipv6 and dns_server['ipv6']:
                 v6 = await self.resolve('AAAA', x, False)
                 if v6:
-                    query = message.make_query(host.decode('utf-8'), mq_type)
-                    ID = query.id
-                    query = query.to_wire()
+                    query, ID = self.dns_encoder(host, mq_type)
                     tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v6[0], 443), x)))
         return tasks
 
@@ -1119,9 +1144,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser):
                 continue
             if ((not self.ipv6 and (self.ipv4 or self.ipv6)) or not dns_server['ipv6']) and self.is_ipv6(x):
                 continue
-            query = message.make_query(host.decode('utf-8'), mq_type)
-            ID = query.id
-            query = query.to_wire()
+            query, ID = self.dns_encoder(host, mq_type)
             tasks.append(asyncio.create_task(self.dns_make_normal_query(query, ID, (x, 53), timeout)))
         return tasks
 
