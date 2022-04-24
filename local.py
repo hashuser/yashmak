@@ -479,11 +479,11 @@ class ymc_dns_cache(ymc_base, ymc_connect):
         self.dns_ttl = dict()
         self.timeout_threshold = 600
 
-    async def resolve(self, host):
+    async def resolve(self, host, force=False):
         if self.is_ip(host):
             host = host.replace(b'::ffff:', b'')
             return [host]
-        elif host in self.dns_pool and self.dns_ttl[host] > time.time():
+        elif not force and host in self.dns_pool and self.dns_ttl[host] > time.time():
             return self.dns_pool[host]
         return await self.dns_query(host)
 
@@ -836,12 +836,13 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
                 await server_writer.drain()
         else:
             await self.http_response(sock, 503)
+            await self.get_IPs(host, sock, True)
             raise Exception('Fail to connect remote server')
         return server_reader, server_writer
 
-    async def get_IPs(self,host,sock):
+    async def get_IPs(self,host,sock,force=False):
         try:
-            IPs = await self.resolve(host)
+            IPs = await self.resolve(host,force)
         except Exception:
             await self.http_response(sock, 502)
             raise Exception('No IP Error')
@@ -1633,7 +1634,7 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
 
     def create_loop(self):
         self.loop = asyncio.new_event_loop()
-        #self.loop.set_exception_handler(self.exception_handler)
+        self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.yashmak_updater())
         self.loop.create_task(self.accept_command())
         self.loop.create_task(self.send_feedback())
