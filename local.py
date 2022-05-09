@@ -433,17 +433,24 @@ class ymc_http_parser:
 
     @staticmethod
     def http_get_request_type(data):
+        data_3, data_4 = data[:3], data[:4]
         if data[:7] == b'CONNECT':
             request_type = 0
             offset = 8
-        elif data[:3] == b'GET':
+        elif data_3 == b'GET':
             request_type = 1
             offset = 4
-        elif data[:4] == b'POST':
+        elif data_4 == b'POST':
             request_type = 2
             offset = 5
-        else:
+        elif data_3 == b'PUT':
             request_type = 3
+            offset = 4
+        elif data_4 == b'HEAD':
+            request_type = 4
+            offset = 5
+        else:
+            request_type = 5
             offset = 0
         return request_type, offset
 
@@ -769,9 +776,8 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
                 if data == b'':
                     raise Exception
                 if scan:
-                    instruction = data[:4]
-                    if b'GET' in instruction or b'POST' in instruction:
-                        request_type, offset = self.http_get_request_type(data)
+                    request_type, offset = self.http_get_request_type(data)
+                    if 0 < request_type < 5:
                         URL, host, _ = self.http_get_address_NG(data, request_type, offset)
                         if not await self.redirect(reader,host,URL,request_type):
                             data = self.http_filter_request_header(data, offset)
@@ -812,7 +818,9 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
     async def make_proxy(self,host,port,data,request_type,abroad,sock):
         server_reader, server_writer = None, None
         if not abroad:
-            for address in await self.get_IPs(host, sock):
+            IPs = await self.get_IPs(host, sock)
+            for x in range(len(IPs)):
+                address = IPs[int(random.random() * 1000000 % len(IPs))]
                 if self.config['mode'] == 'auto' and not (self.is_china_ip(address) or self.is_local_ip(address)):
                     abroad = True
                     break
@@ -977,7 +985,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
         if data == b'':
             raise Exception('Tunnel Timeout')
         request_type, offset = self.http_get_request_type(data)
-        if request_type == 3:
+        if request_type == 5:
             host, port = await self.socks5_get_address(sock)
             URL, data = None, None
         elif request_type == 0:
@@ -2039,7 +2047,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                     winreg.SetValueEx(root, name, 0, reg_type, value)
 
             set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
-            set_key(INTERNET_SETTINGS, 'ProxyOverride', 'localhost;windows10.microdone.cn;<local>')
+            set_key(INTERNET_SETTINGS, 'ProxyOverride', "localhost;<local>")
             set_key(INTERNET_SETTINGS, 'ProxyServer', '127.0.0.1:' + config[config['active']]['listen'])
             set_key(ENVIRONMENT_SETTING, 'HTTP_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
             set_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
@@ -2327,7 +2335,13 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             return 'ERROR'
 
     def pop_message(self,message):
-        self.tp.showMessage('Yashmak', self.text_translator(message), msecs=1000)
+        self.tp.showMessage('Yashmak', self.text_translator(message),msecs=1000)
+        """if self.is_light_Theme():
+            icon = 'C:/Users/Home/PycharmProjects/QYashmak/project/test.png'
+        else:
+            icon = 'C:/Users/Home/PycharmProjects/QYashmak/project/test2.png'
+        toast = winotify.Notification(app_id=' ',title='Yashmak',msg=self.translate(message),icon=icon)
+        toast.show()"""
 
 
 if __name__ == '__main__':
