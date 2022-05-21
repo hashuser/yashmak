@@ -1874,7 +1874,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                 self.developer = (0, time.time())
             self.developer = (self.developer[0] + 1, time.time())
             if self.developer[0] >= 5:
-                os.popen("start " + os.path.abspath(os.path.dirname(sys.argv[0])) + "/Config")
+                os.popen("start " + self.base_path + "/Config")
                 self.developer = (0, time.time())
 
     def close_menu(self):
@@ -1883,6 +1883,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def init_widget(self):
         try:
+            self.init_constants()
             self.init_SystemTray()
             self.init_SystemTray_Menu()
             self.init_elements()
@@ -1890,6 +1891,11 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.run()
         except Exception as error:
             self.panic(error)
+
+    def init_constants(self):
+        self.base_path = os.path.abspath(os.path.dirname(sys.argv[0]))
+        self.path_config = self.base_path + '/Config/config.json'
+        self.path_preference = self.base_path + '/Config/preference.json'
 
     def init_SystemTray(self):
         self.w = QtWidgets.QWidget()
@@ -1961,9 +1967,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def change_startup_policy(self):
         reverse = {'auto': 'manual', 'manual': 'auto'}
-        path_preference = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/preference.json'
-        if os.path.exists(path_preference):
-            with open(path_preference, 'r') as file:
+        if os.path.exists(self.path_preference):
+            with open(self.path_preference, 'r') as file:
                 content = file.read()
             content = self.translate(content)
             preference = json.loads(content)
@@ -1980,23 +1985,21 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.pop_message('已设置开机自启')
 
     def init_elements(self):
-        path_config = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
-        path_preference = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/preference.json'
-        if os.path.exists(path_config):
-            with open(path_config, 'r') as file:
+        if os.path.exists(self.path_config):
+            with open(self.path_config, 'r') as file:
                 content = file.read()
             content = self.translate(content)
             config = json.loads(content)
         else:
             raise Exception
-        if os.path.exists(path_preference):
-            with open(path_preference, 'r') as file:
+        if os.path.exists(self.path_preference):
+            with open(self.path_preference, 'r') as file:
                 content = file.read()
             content = self.translate(content)
             preference = json.loads(content)
         else:
             preference = {'startup': 'auto', 'mode': 'auto'}
-            with open(path_preference, 'w') as file:
+            with open(self.path_preference, 'w') as file:
                 json.dump(preference, file, indent=4)
         ver = config['version']
         if len(ver) == 3:
@@ -2020,9 +2023,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         self.init_menu()
 
     def set_proxy(self):
-        path_config = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/config.json'
-        if os.path.exists(path_config):
-            with open(path_config, 'r') as file:
+        if os.path.exists(self.path_config):
+            with open(self.path_config, 'r') as file:
                 content = file.read()
             content = self.translate(content)
             config = json.loads(content)
@@ -2043,7 +2045,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                     elif isinstance(value, int):
                         reg_type = 4
                     else:
-                        raise Exception
+                        raise Exception('Invalid Value')
                     winreg.SetValueEx(root, name, 0, reg_type, value)
 
             set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
@@ -2054,6 +2056,9 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             internet_set_option = ctypes.windll.wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
+            win32api.ShellExecute(0, 'open', self.base_path + '\Proxifier\Proxifier.exe', self.base_path + '\Proxifier\Profiles\Yashmak.ppx silent-load', '', 1)
+        else:
+            raise Exception('Unsupported Platform')
 
     @staticmethod
     def reset_proxy():
@@ -2072,7 +2077,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                     elif isinstance(value, int):
                         reg_type = 4
                     else:
-                        raise Exception
+                        raise Exception('Invalid Value')
                     winreg.SetValueEx(root, name, 0, reg_type, value)
 
             def delete_key(root, name):
@@ -2087,21 +2092,30 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
+            for x in psutil.pids():
+                try:
+                    if 'proxifier.exe' == psutil.Process(x).name().lower():
+                        psutil.Process(x).kill()
+                        break
+                except Exception as error:
+                    print(error)
+        else:
+            raise Exception('Unsupported Platform')
 
     def auto_startup(self, enable):
-        base_path = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/"
-        for x in os.listdir(base_path):
-            if os.path.isfile(base_path+x) and "Yashmak" in x:
+        startup_path = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/"
+        for x in os.listdir(startup_path):
+            if os.path.isfile(startup_path+x) and "Yashmak" in x:
                 try:
-                    os.remove(base_path+x)
+                    os.remove(startup_path+x)
                 except Exception as error:
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
-        location = base_path + "Yashmak" + str(random.randint(10000000,99999999)) + ".lnk"
+        location = startup_path + "Yashmak" + str(random.randint(10000000,99999999)) + ".lnk"
         if enable:
-            self.make_link(location,os.path.abspath(os.path.dirname(sys.argv[0])) + "\Verify.exe")
+            self.make_link(location,self.base_path + "\Verify.exe")
         else:
-            self.make_link(location,os.path.abspath(os.path.dirname(sys.argv[0])) + "\Recover.exe")
+            self.make_link(location,self.base_path + "\Recover.exe")
 
     @staticmethod
     def enable_loopback_UWPs():
@@ -2154,7 +2168,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         repaired = 0
         spares = ['chinalist.json','old.json']
         while True:
-            path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/pid'
+            path = self.base_path + '/Config/pid'
             try:
                 if os.path.exists(path):
                     with open(path, 'r') as file:
@@ -2215,24 +2229,22 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             counter += 1
 
     def message_successful(self):
-        base_path = os.path.abspath(os.path.dirname(sys.argv[0]))
-        if os.path.exists(base_path + '/Config/new.json'):
+        if os.path.exists(self.base_path + '/Config/new.json'):
             self.pop_message('Yashmak更新成功')
-            os.remove(base_path + '/Config/new.json')
+            os.remove(self.base_path + '/Config/new.json')
         else:
             self.pop_message('成功连接')
 
     def edit_preference(self,key, value):
-        path_preference = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/preference.json'
-        if os.path.exists(path_preference):
-            with open(path_preference, 'r') as file:
+        if os.path.exists(self.path_preference):
+            with open(self.path_preference, 'r') as file:
                 content = file.read()
             content = self.translate(content)
             preference = json.loads(content)
         else:
             raise Exception
         preference[key] = value
-        with open(path_preference, 'w') as file:
+        with open(self.path_preference, 'w') as file:
             json.dump(preference, file, indent=4)
 
     def panic(self, error):
