@@ -20,12 +20,14 @@ import win32api
 import win32gui
 import win32con
 import win32print
+import win32process
 import winreg
 import ctypes
 import psutil
 from Cryptodome.Cipher import AES
 import hashlib
 import shutil
+import subprocess
 
 
 class ymc_base:
@@ -482,59 +484,80 @@ class ymc_http_parser:
 
 class ymc_dns_cache(ymc_base, ymc_connect):
     def __init__(self):
-        self.dns_pool = dict()
-        self.dns_ttl = dict()
+        self.dns_records, self.dns_futures_map = dict(), dict()
         self.timeout_threshold = 600
+        self.dns_query_send_buffer = asyncio.queues.Queue()
+
+    async def connect_dns_local(self):
+        if socket.has_dualstack_ipv6():
+            localhost = '::1'
+        else:
+            localhost = '127.0.0.1'
+        self.dns_local_reader, self.dns_local_writer = await self.open_connection(localhost, self.config['dns_port'])
+        self.dns_local_writer.write(b'8f1f5d11-98bc-42de-a996-e86c8c0cdf7f')
+        await self.dns_local_writer.drain()
+        self.loop.create_task(self.dns_query_sender())
+        self.loop.create_task(self.dns_response_receiver())
 
     async def resolve(self, host, force=False):
         if self.is_ip(host):
             host = host.replace(b'::ffff:', b'')
             return [host]
-        elif not force and host in self.dns_pool and self.dns_ttl[host] > time.time():
-            return self.dns_pool[host]
+        elif not force and host in self.dns_records and self.dns_records[host][1] > time.time():
+            return self.dns_records[host][0]
         return await self.dns_query(host)
 
     async def dns_query(self, host):
         result = await self.dns_query_worker(host)
         if result != None:
-            self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time() + self.timeout_threshold
+            self.dns_records[host] = (result, time.time() + self.timeout_threshold)
             return result
         else:
             raise Exception('No IP Error')
 
     async def dns_query_worker(self, host, timeout=10):
-        server_writer = None
-        try:
-            if socket.has_dualstack_ipv6():
-                localhost = '::1'
-            else:
-                localhost = '127.0.0.1'
-            server_reader, server_writer = await self.open_connection(localhost, self.config['dns_port'])
-            server_writer.write(host)
-            await server_writer.drain()
-            data = await asyncio.wait_for(server_reader.read(65535), timeout)
-            if data == b'None':
-                result = None
-            elif data == b'No':
-                result = []
-            else:
-                result = data.split(b',')
-            return result
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-        finally:
-            await self.clean_up(server_writer)
+        future = self.loop.create_future()
+        if host in self.dns_futures_map:
+            self.dns_futures_map[host].add(future)
+        else:
+            self.dns_futures_map[host] = {future}
+        await self.dns_query_send_buffer.put(host)
+        result = await asyncio.wait_for(future, timeout)
+        return result
+
+    async def dns_query_sender(self):
+        while True:
+            buffer = await self.dns_query_send_buffer.get() + b'\n'
+            if buffer:
+                self.dns_local_writer.write(buffer)
+                await self.dns_local_writer.drain()
+
+    async def dns_response_receiver(self):
+        buffer = b''
+        while True:
+            buffer += await self.dns_local_reader.read(65535)
+            position = buffer.rfind(b'\n')
+            records = buffer[:position].split(b'\n')
+            buffer = buffer[position + 1:]
+            for record in records:
+                data = record.split(b'\r')
+                host, data = data[0], data[1]
+                if data == b'None':
+                    result = None
+                elif data == b'No':
+                    result = []
+                else:
+                    result = data.split(b',')
+                if host in self.dns_futures_map:
+                    future = self.dns_futures_map[host].pop()
+                    future.set_result(result)
 
     async def dns_clear_cache(self):
         while True:
             try:
-                for x in list(self.dns_pool.keys()):
-                    if x in self.dns_ttl and self.dns_ttl[x] < time.time():
-                        if x in self.dns_pool:
-                            del self.dns_pool[x]
-                        del self.dns_ttl[x]
+                for x in list(self.dns_records.keys()):
+                    if self.dns_records[x][1] < time.time():
+                        del self.dns_records[x]
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -728,6 +751,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
         self.loop.create_task(self.HSTS_list_updater())
         self.loop.create_task(self.push_HSTS_list())
         self.loop.create_task(self.dns_clear_cache())
+        self.loop.create_task(self.connect_dns_local())
         self.loop.run_forever()
 
     async def create_server(self):
@@ -1107,7 +1131,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         gc.set_threshold(100000, 50, 50)
         self.config = config
         self.normal_context = self.init_normal_context()
-        self.dns_pool, self.dns_ttl, self.dns_hit_record = dict(), dict(), dict()
+        self.dns_records, self.dns_futures_map = dict(), dict()
         self.dns_processing = set()
         self.ipv4, self.ipv6 = True, True
         self.set_priority('above_normal')
@@ -1135,29 +1159,56 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
     async def handler(self, client_reader, client_writer):
         try:
             host = await asyncio.wait_for(client_reader.read(65535), 20)
-            if host != b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
-                dns_record = await self.auto_resolve(host)
-                if dns_record and dns_record != [None]:
-                    dns_record = str(dns_record).encode('utf-8')[3:-2]
-                    dns_record = dns_record.replace(b"b'",b"")
-                    dns_record = dns_record.replace(b"'",b"")
-                    dns_record = dns_record.replace(b" ",b"")
-                    client_writer.write(dns_record)
-                elif dns_record == [None]:
-                    client_writer.write(b'No')
-                else:
-                    client_writer.write(b'None')
-                await client_writer.drain()
+            if host == b'8f1f5d11-98bc-42de-a996-e86c8c0cdf7f':
+                dns_response_send_buffer = asyncio.queues.Queue()
+                await asyncio.gather(self.dns_query_receiver(client_reader, dns_response_send_buffer),
+                                     self.dns_response_sender(client_writer, dns_response_send_buffer))
+            elif host == b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
+                await self.internet_status(client_writer)
             else:
-                while True:
-                    client_writer.write(str(self.has_internet()).encode('utf-8'))
-                    await client_writer.drain()
-                    await self.sleep(1)
+                raise Exception('Invalid Connection')
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         finally:
             await self.clean_up(client_writer)
+
+    async def dns_query_receiver(self, client_reader, dns_response_send_buffer):
+        buffer = b''
+        while True:
+            buffer += await client_reader.read(65535)
+            position = buffer.rfind(b'\n')
+            hosts = buffer[:position].split(b'\n')
+            buffer = buffer[position + 1:]
+            for host in hosts:
+                self.loop.create_task(self.dns_query_processor(host, dns_response_send_buffer))
+
+    @staticmethod
+    async def dns_response_sender(client_writer, dns_response_send_buffer):
+        while True:
+            buffer = await dns_response_send_buffer.get() + b'\n'
+            if buffer:
+                client_writer.write(buffer)
+                await client_writer.drain()
+
+    async def dns_query_processor(self, host, dns_response_send_buffer):
+        dns_record = await self.auto_resolve(host)
+        if dns_record and dns_record != [None]:
+            dns_record = str(dns_record).encode('utf-8')[3:-2]
+            dns_record = dns_record.replace(b"b'", b"")
+            dns_record = dns_record.replace(b"'", b"")
+            dns_record = dns_record.replace(b" ", b"")
+            await dns_response_send_buffer.put(host + b'\r' + dns_record)
+        elif dns_record == [None]:
+            await dns_response_send_buffer.put(host + b'\rNo')
+        else:
+            await dns_response_send_buffer.put(host + b'\rNone')
+
+    async def internet_status(self, client_writer):
+        while True:
+            client_writer.write(str(self.has_internet()).encode('utf-8'))
+            await client_writer.drain()
+            await self.sleep(1)
 
     async def network_detector(self,hosts,dns_server):
         for host in hosts:
@@ -1191,6 +1242,9 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
                     self.internet_failure_counter += 1
                 else:
                     self.internet_failure_counter = 0
+                    while self.dns_futures_map['internet']:
+                        future = self.dns_futures_map['internet'].pop()
+                        future.set_result(True)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -1222,16 +1276,16 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
             return [host]
-        elif host not in self.dns_processing and (host not in self.dns_pool or (host in self.dns_ttl and time.time() >= self.dns_ttl[host] + 480)):
+        elif host not in self.dns_processing and (host not in self.dns_records or time.time() >= self.dns_records[host][1] + 480):
             await self.wait_until_has_internet()
             await self.dns_query(host, doh)
         await self.wait_until_has_record(host)
-        if host in self.dns_pool:
-            self.dns_hit_record[host] = time.time() + 3600
+        if host in self.dns_records:
+            self.dns_records[host] = (self.dns_records[host][0], self.dns_records[host][1], time.time() + 3600)
             if q_type != 'ALL':
-                return self.dns_pool[host][q_type]
+                return self.dns_records[host][0][q_type]
             else:
-                return self.dns_pool[host]['A'] + self.dns_pool[host]['AAAA']
+                return self.dns_records[host][0]['A'] + self.dns_records[host][0]['AAAA']
         else:
             return []
 
@@ -1251,9 +1305,12 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
             ipv6 = ([], 2147483647)
         if ipv4[0] or ipv6[0]:
             result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
-            self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time() + min(ipv4[1], ipv6[1])
+            self.dns_records[host] = (result, time.time() + min(ipv4[1], ipv6[1], time.time() + 3600))
         self.dns_processing.remove(host)
+        if host in self.dns_futures_map:
+            while self.dns_futures_map[host]:
+                future = self.dns_futures_map[host].pop()
+                future.set_result(True)
 
     async def dns_query_worker(self, host, q_type, doh, dns_server=None, timeout=5):
         try:
@@ -1390,13 +1447,12 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         while True:
             s = time.time()
             try:
-                if self.has_internet():
-                    refreshable = []
-                    for x in list(self.dns_pool.keys()):
-                        if x in self.dns_ttl and time.time() >= self.dns_ttl[x]:
-                            refreshable.append(x)
-                    # print(refreshable)
-                    await self.dns_refresh_cache_worker(refreshable)
+                await self.wait_until_has_internet()
+                refreshable = []
+                for x in list(self.dns_records.keys()):
+                    if time.time() >= self.dns_records[x][1]:
+                        refreshable.append(x)
+                await self.dns_refresh_cache_worker(refreshable)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -1408,18 +1464,14 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         for x in refreshable:
             await self.wait_until_has_internet()
             await self.wait_until_has_record(x)
-            await self.dns_query(x, self.dns_pool[x]['doh'])
+            await self.dns_query(x, self.dns_records[x][0]['doh'])
 
     async def dns_clear_cache(self):
         while True:
             try:
-                for x in list(self.dns_pool.keys()):
-                    if x in self.dns_hit_record and time.time() >= self.dns_hit_record[x]:
-                        if x in self.dns_pool:
-                            del self.dns_pool[x]
-                        if x in self.dns_ttl:
-                            del self.dns_ttl[x]
-                        del self.dns_hit_record[x]
+                for x in list(self.dns_records.keys()):
+                    if time.time() >= self.dns_records[x][2]:
+                        del self.dns_records[x]
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -1427,16 +1479,22 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
                 await self.sleep(60)
 
     async def wait_until_has_internet(self):
-        e = time.time() + 5
-        while self.internet_failure_counter > 5 and time.time() < e:
-            await self.sleep(0.5)
+        if not self.has_internet():
+            future = self.loop.create_future()
+            if 'internet' in self.dns_futures_map:
+                self.dns_futures_map['internet'].add(future)
+            else:
+                self.dns_futures_map['internet'] = {future}
+            await future
 
     async def wait_until_has_record(self, host):
-        if host in self.dns_processing:
-            e = time.time() + 5
-            while host not in self.dns_pool and time.time() < e:
-                # print('wait record', host)
-                await self.sleep(0.02)
+        if host in self.dns_processing and host not in self.dns_records:
+            future = self.loop.create_future()
+            if host in self.dns_futures_map:
+                self.dns_futures_map[host].add(future)
+            else:
+                self.dns_futures_map[host] = {future}
+            await future
 
     def exception_handler(self, loop, context):
         pass
@@ -1471,6 +1529,7 @@ class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
         self.loop.create_task(self.HSTS_list_updater())
         self.loop.create_task(self.internet_refresh_cache())
         self.loop.create_task(self.dns_clear_cache())
+        self.loop.create_task(self.connect_dns_local())
         self.loop.run_forever()
 
     async def white_list_updater(self):
