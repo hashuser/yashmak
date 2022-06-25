@@ -20,14 +20,12 @@ import win32api
 import win32gui
 import win32con
 import win32print
-import win32process
 import winreg
 import ctypes
 import psutil
 from Cryptodome.Cipher import AES
 import hashlib
 import shutil
-import subprocess
 
 
 class ymc_base:
@@ -886,6 +884,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
             server_writer.write(self.config['uuid'])
         else:
             server_reader, server_writer = self.connection_pool.pop(-1)
+            self.pool_future.set_result(True)
         server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True) + host + b'\n' + port + b'\n')
         await server_writer.drain()
         return server_reader, server_writer
@@ -913,6 +912,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
             self.pool_max_size = 4
             self.is_checking = 0
             self.is_connecting = 0
+            self.pool_future = None
             self.loop.create_task(self.pool_health())
             self.loop.create_task(self.white_list_updater())
         while True:
@@ -923,7 +923,11 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
                 except Exception as error:
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
-            await asyncio.sleep(0.5)
+            if len(self.connection_pool):
+                self.pool_future = self.loop.create_future()
+                await self.pool_future
+            else:
+                await self.sleep(1)
 
     async def make_connections(self):
         try:
@@ -936,6 +940,8 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             self.is_connecting -= 1
+            await self.sleep(1)
+            self.pool_future.set_result(True)
 
     async def pool_health(self):
         while True:
@@ -966,6 +972,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             self.is_checking -= 1
+            self.pool_future.set_result(True)
             await self.clean_up(x[1])
 
     async def white_list_updater(self):
@@ -1194,11 +1201,11 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
     async def dns_query_processor(self, host, dns_response_send_buffer):
         dns_record = await self.auto_resolve(host)
         if dns_record and dns_record != [None]:
-            dns_record = str(dns_record).encode('utf-8')[3:-2]
-            dns_record = dns_record.replace(b"b'", b"")
-            dns_record = dns_record.replace(b"'", b"")
-            dns_record = dns_record.replace(b" ", b"")
-            await dns_response_send_buffer.put(host + b'\r' + dns_record)
+            buffer = b''
+            for x in dns_record:
+                buffer += x + b','
+            buffer = buffer[:-1]
+            await dns_response_send_buffer.put(host + b'\r' + buffer)
         elif dns_record == [None]:
             await dns_response_send_buffer.put(host + b'\rNo')
         else:
@@ -1943,9 +1950,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
     def init_widget(self):
         try:
             self.init_constants()
-            self.init_SystemTray()
-            self.init_SystemTray_Menu()
-            self.init_elements()
+            self.init_config()
+            self.init_SystemTray_and_menu()
             self.show_SystemTray()
             self.run()
         except Exception as error:
@@ -1955,18 +1961,66 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         self.base_path = os.path.abspath(os.path.dirname(sys.argv[0]))
         self.path_config = self.base_path + '/Config/config.json'
         self.path_preference = self.base_path + '/Config/preference.json'
+        self.INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0, winreg.KEY_ALL_ACCESS)
+        self.ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
 
-    def init_SystemTray(self):
+    def init_config(self):
+        preference = {'startup': 'auto', 'mode': 'auto', 'proxy': 'normal'}
+        if os.path.exists(self.path_preference):
+            with open(self.path_preference, 'r') as file:
+                content = file.read()
+            content = self.translate(content)
+            self.preference = json.loads(content)
+            for x in preference:
+                if x not in self.preference:
+                    self.preference[x] = preference[x]
+        else:
+            self.preference = preference
+        with open(self.path_preference, 'w') as file:
+            json.dump(self.preference, file, indent=4)
+        if os.path.exists(self.path_config):
+            with open(self.path_config, 'r') as file:
+                content = file.read()
+            content = self.translate(content)
+            self.config = json.loads(content)
+        else:
+            raise Exception
+
+    def init_SystemTray_and_menu(self):
         self.w = QtWidgets.QWidget()
         self.tp = QtWidgets.QSystemTrayIcon()
         self.set_theme()
         self.tp.activated.connect(self.activate)
-
-    def init_SystemTray_Menu(self):
+        # init System-tray
         self.tpmen = QtWidgets.QMenu()
         self.set_actions()
         self.set_QSS()
         self.set_flags()
+        # init Tray-menu
+        self.init_menu_elements()
+
+    def init_menu_elements(self):
+        ver = self.config['version']
+        if len(ver) == 3:
+            self.tp.setToolTip('Yashmak v'+ver[0]+'.'+ver[1]+'.'+ver[2])
+        elif len(ver) == 4:
+            self.tp.setToolTip('Yashmak v' + ver[:2] + '.' + ver[2] + '.' + ver[3])
+        else:
+            raise Exception('Illegal Version')
+        self.set_mode_UI(self.preference['mode'].lower())
+        if self.preference['startup'].lower() == 'auto':
+            self.set_auto_startup(True)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
+        elif self.preference['startup'].lower() == 'manual':
+            self.set_auto_startup(False)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
+        if self.preference['proxy'].lower() == 'enhanced':
+            self.set_enhanced_proxy(True)
+            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('correct.svg'))
+        elif self.preference['proxy'].lower() == 'normal':
+            self.set_enhanced_proxy(False)
+            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('hook.svg'))
+        self.init_menu()
 
     def show_SystemTray(self):
         self.tp.show()
@@ -1984,11 +2038,12 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def set_actions(self):
         self.actions = {
-            'Auto': QtGui.QAction(self.text_translator(' 自动模式 '), triggered=lambda: self.react('Auto'),icon=QtGui.QIcon('correct.svg')),
-            'Global': QtGui.QAction(self.text_translator(' 全局模式 '), triggered=lambda: self.react('Global'),icon=QtGui.QIcon('correct.svg')),
-            'Direct': QtGui.QAction(self.text_translator(' 直连模式 '), triggered=lambda: self.react('Direct'),icon=QtGui.QIcon('correct.svg')),
+            'auto': QtGui.QAction(self.text_translator(' 自动模式 '), triggered=lambda: self.react('auto')),
+            'global': QtGui.QAction(self.text_translator(' 全局模式 '), triggered=lambda: self.react('global')),
+            'direct': QtGui.QAction(self.text_translator(' 直连模式 '), triggered=lambda: self.react('direct')),
             'AutoStartup': QtGui.QAction(self.text_translator(' 开机自启 '), triggered=lambda: self.react('AutoStartup')),
-            'AllowUWP': QtGui.QAction(self.text_translator(' 允许UWP '), triggered=lambda: self.react('AllowUWP'),icon=QtGui.QIcon('hook.svg')),
+            'EnhancedProxy': QtGui.QAction(self.text_translator(' 增强代理 '), triggered=lambda: self.react('EnhancedProxy')),
+            'AllowUWP': QtGui.QAction(self.text_translator(' 允许UWP '), triggered=lambda: self.react('AllowUWP')),
             'Close': QtGui.QAction(self.text_translator(' 退出 '), triggered=lambda: self.react('Close'))}
 
     def set_QSS(self):
@@ -2009,8 +2064,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         self.tpmen.setWindowFlag(QtCore.Qt.WindowType.NoDropShadowWindowHint)
 
     def react(self,message):
-        if message in ['Auto','Global','Direct']:
-            self.change_mode(message)
+        if message in ['auto','global','direct']:
+            self.change_mode_to(message)
         elif message == 'Close':
             self.exit()
             self.pop_message('已退出并断开连接')
@@ -2019,149 +2074,116 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             raise Exception('EXIT')
         elif message == 'AutoStartup':
             self.change_startup_policy()
+        elif message == 'EnhancedProxy':
+            self.change_enhanced_proxy_policy()
         elif message == 'AllowUWP':
             ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
             self.pop_message('已允许UWP应用连接代理')
         self.tpmen.update()
 
+    def change_mode_to(self,mode):
+        mes = {'auto':'已设置为自动模式','global':'已设置为全局模式','direct':'已设置为直连模式'}
+        self.kill_daemon()
+        self.edit_preference('mode', mode.lower())
+        self.run(False)
+        self.pop_message(mes[mode])
+        self.set_mode_UI(mode)
+
     def change_startup_policy(self):
         reverse = {'auto': 'manual', 'manual': 'auto'}
-        if os.path.exists(self.path_preference):
-            with open(self.path_preference, 'r') as file:
-                content = file.read()
-            content = self.translate(content)
-            preference = json.loads(content)
-        else:
-            raise Exception
-        self.edit_preference('startup', reverse[preference['startup'].lower()])
-        if preference['startup'].lower() == 'auto':
-            self.auto_startup(False)
-            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
-            self.pop_message('已取消开机自启')
-        elif preference['startup'].lower() == 'manual':
-            self.auto_startup(True)
+        self.edit_preference('startup', reverse[self.preference['startup'].lower()])
+        if self.preference['startup'].lower() == 'auto':
+            self.set_auto_startup(True)
             self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
             self.pop_message('已设置开机自启')
+        elif self.preference['startup'].lower() == 'manual':
+            self.set_auto_startup(False)
+            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
+            self.pop_message('已取消开机自启')
 
-    def init_elements(self):
-        if os.path.exists(self.path_config):
-            with open(self.path_config, 'r') as file:
-                content = file.read()
-            content = self.translate(content)
-            config = json.loads(content)
-        else:
-            raise Exception
+    def change_enhanced_proxy_policy(self):
+        reverse = {'normal': 'enhanced', 'enhanced': 'normal'}
+        self.edit_preference('proxy', reverse[self.preference['proxy'].lower()])
+        if self.preference['proxy'].lower() == 'enhanced':
+            self.set_enhanced_proxy(True)
+            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('correct.svg'))
+            self.pop_message('已开启增强代理')
+        elif self.preference['proxy'].lower() == 'normal':
+            self.set_enhanced_proxy(False)
+            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('hook.svg'))
+            self.pop_message('已关闭增强代理')
+
+    def edit_preference(self,key, value):
         if os.path.exists(self.path_preference):
             with open(self.path_preference, 'r') as file:
                 content = file.read()
             content = self.translate(content)
-            preference = json.loads(content)
-        else:
-            preference = {'startup': 'auto', 'mode': 'auto'}
-            with open(self.path_preference, 'w') as file:
-                json.dump(preference, file, indent=4)
-        ver = config['version']
-        if len(ver) == 3:
-            self.tp.setToolTip('Yashmak v'+ver[0]+'.'+ver[1]+'.'+ver[2])
-        elif len(ver) == 4:
-            self.tp.setToolTip('Yashmak v' + ver[:2] + '.' + ver[2] + '.' + ver[3])
-        else:
-            raise Exception('Illegal Version')
-        if preference['mode'].lower() == 'auto':
-            self.set_mode_UI('Auto')
-        elif preference['mode'].lower() == 'global':
-            self.set_mode_UI('Global')
-        elif preference['mode'].lower() == 'direct':
-            self.set_mode_UI('Direct')
-        if preference['startup'].lower() == 'auto':
-            self.auto_startup(True)
-            self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
-        elif preference['startup'].lower() == 'manual':
-            self.auto_startup(False)
-            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
-        self.init_menu()
-
-    def set_proxy(self):
-        if os.path.exists(self.path_config):
-            with open(self.path_config, 'r') as file:
-                content = file.read()
-            content = self.translate(content)
-            config = json.loads(content)
+            self.preference = json.loads(content)
         else:
             raise Exception
+        self.preference[key] = value
+        with open(self.path_preference, 'w') as file:
+            json.dump(self.preference, file, indent=4)
+
+    def option_switcher(self,items,target):
+        for x in items:
+            if x == target:
+                self.actions[x].setIcon(QtGui.QIcon('correct.svg'))
+            else:
+                self.actions[x].setIcon(QtGui.QIcon('hook.svg'))
+
+    def set_mode_UI(self,mode):
+        self.option_switcher(['auto', 'global', 'direct'], mode)
+
+    def init_menu(self):
+        item = ['auto','global','direct','Separator','AutoStartup','EnhancedProxy','AllowUWP','Close']
+        for x in item:
+            if x == 'Separator':
+                self.tpmen.addSeparator()
+            elif x in self.actions:
+                self.tpmen.addAction(self.actions[x])
+
+    def set_proxy(self, enable):
         platform = sys.platform
         if platform == 'win32':
-            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings',0, winreg.KEY_ALL_ACCESS)
-            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Environment',0, winreg.KEY_ALL_ACCESS)
-
-            def set_key(root, name, value):
-                try:
-                    _, reg_type = winreg.QueryValueEx(root, name)
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
-                except Exception:
-                    if isinstance(value, str):
-                        reg_type = 1
-                    elif isinstance(value, int):
-                        reg_type = 4
-                    else:
-                        raise Exception('Invalid Value')
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
-
-            set_key(INTERNET_SETTINGS, 'ProxyEnable', 1)
-            set_key(INTERNET_SETTINGS, 'ProxyOverride', "localhost;<local>")
-            set_key(INTERNET_SETTINGS, 'ProxyServer', '127.0.0.1:' + config[config['active']]['listen'])
-            set_key(ENVIRONMENT_SETTING, 'HTTP_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
-            set_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY', 'http://127.0.0.1:' + config[config['active']]['listen'])
+            if enable:
+                self.set_key(self.INTERNET_SETTINGS, 'ProxyEnable', 1)
+                self.set_key(self.INTERNET_SETTINGS, 'ProxyOverride', "localhost;<local>")
+                self.set_key(self.INTERNET_SETTINGS, 'ProxyServer','127.0.0.1:' + self.config[self.config['active']]['listen'])
+                self.set_key(self.ENVIRONMENT_SETTING, 'HTTP_PROXY','http://127.0.0.1:' + self.config[self.config['active']]['listen'])
+                self.set_key(self.ENVIRONMENT_SETTING, 'HTTPS_PROXY','http://127.0.0.1:' + self.config[self.config['active']]['listen'])
+            else:
+                self.set_key(self.INTERNET_SETTINGS, 'ProxyEnable', 0)
+                self.delete_key(self.ENVIRONMENT_SETTING, 'HTTP_PROXY')
+                self.delete_key(self.ENVIRONMENT_SETTING, 'HTTPS_PROXY')
             internet_set_option = ctypes.windll.wininet.InternetSetOptionW
             internet_set_option(0, 37, 0, 0)
             internet_set_option(0, 39, 0, 0)
-            win32api.ShellExecute(0, 'open', self.base_path + '\Proxifier\Proxifier.exe', self.base_path + '\Proxifier\Profiles\Yashmak.ppx silent-load', '', 1)
         else:
             raise Exception('Unsupported Platform')
 
     @staticmethod
-    def reset_proxy():
-        platform = sys.platform
-        if platform == 'win32':
-            INTERNET_SETTINGS = winreg.OpenKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Internet Settings', 0,winreg.KEY_ALL_ACCESS)
-            ENVIRONMENT_SETTING = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Environment', 0, winreg.KEY_ALL_ACCESS)
+    def set_key(root, name, value):
+        try:
+            _, reg_type = winreg.QueryValueEx(root, name)
+            winreg.SetValueEx(root, name, 0, reg_type, value)
+        except Exception:
+            if isinstance(value, str):
+                reg_type = 1
+            elif isinstance(value, int):
+                reg_type = 4
+            else:
+                raise Exception('Invalid Value')
+            winreg.SetValueEx(root, name, 0, reg_type, value)
 
-            def set_key(root, name, value):
-                try:
-                    _, reg_type = winreg.QueryValueEx(root, name)
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
-                except Exception:
-                    if isinstance(value, str):
-                        reg_type = 1
-                    elif isinstance(value, int):
-                        reg_type = 4
-                    else:
-                        raise Exception('Invalid Value')
-                    winreg.SetValueEx(root, name, 0, reg_type, value)
+    @staticmethod
+    def delete_key(root, name):
+        try:
+            winreg.DeleteValue(root, name)
+        except Exception:
+            pass
 
-            def delete_key(root, name):
-                try:
-                    winreg.DeleteValue(root, name)
-                except Exception:
-                    pass
-
-            set_key(INTERNET_SETTINGS, 'ProxyEnable', 0)
-            delete_key(ENVIRONMENT_SETTING, 'HTTP_PROXY')
-            delete_key(ENVIRONMENT_SETTING, 'HTTPS_PROXY')
-            internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
-            internet_set_option(0, 37, 0, 0)
-            internet_set_option(0, 39, 0, 0)
-            for x in psutil.pids():
-                try:
-                    if 'proxifier.exe' == psutil.Process(x).name().lower():
-                        psutil.Process(x).kill()
-                        break
-                except Exception as error:
-                    print(error)
-        else:
-            raise Exception('Unsupported Platform')
-
-    def auto_startup(self, enable):
+    def set_auto_startup(self, enable):
         startup_path = "C:/Users/" + os.getlogin() + "/AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/"
         for x in os.listdir(startup_path):
             if os.path.isfile(startup_path+x) and "Yashmak" in x:
@@ -2175,6 +2197,18 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.make_link(location,self.base_path + "\Verify.exe")
         else:
             self.make_link(location,self.base_path + "\Recover.exe")
+
+    def set_enhanced_proxy(self, enable):
+        if enable:
+            win32api.ShellExecute(0, 'open', self.base_path + '\Proxifier\Proxifier.exe',self.base_path + '\Proxifier\Profiles\Yashmak.ppx silent-load', '', 1)
+        else:
+            for x in psutil.pids():
+                try:
+                    if 'proxifier.exe' == psutil.Process(x).name().lower():
+                        psutil.Process(x).kill()
+                        break
+                except Exception as error:
+                    pass
 
     @staticmethod
     def enable_loopback_UWPs():
@@ -2220,7 +2254,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             error.__traceback__ = None
 
     def exit(self):
-        self.reset_proxy()
+        self.set_proxy(False)
+        self.set_enhanced_proxy(False)
         self.kill_daemon()
 
     def run(self, normal=True):
@@ -2245,7 +2280,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             T = threading.Thread(target=self.status_detector, args=(info,normal,))
             T.start()
             if info == 'OK' and self.process1.is_alive():
-                self.set_proxy()
+                self.set_proxy(True)
                 break
             elif info == 'No internet connection':
                 break
@@ -2294,18 +2329,6 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         else:
             self.pop_message('成功连接')
 
-    def edit_preference(self,key, value):
-        if os.path.exists(self.path_preference):
-            with open(self.path_preference, 'r') as file:
-                content = file.read()
-            content = self.translate(content)
-            preference = json.loads(content)
-        else:
-            raise Exception
-        preference[key] = value
-        with open(self.path_preference, 'w') as file:
-            json.dump(preference, file, indent=4)
-
     def panic(self, error):
         self.panic_log(str(error))
         if 'Yashmak has already lunched' in str(error):
@@ -2320,7 +2343,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             time.sleep(2)
             raise Exception('EXIT')
         elif 'Child Process Accidentally Exit' in str(error):
-            self.reset_proxy()
+            self.set_proxy(False)
             self.pop_message('子进程意外退出')
         elif str(error) != 'EXIT':
             self.exit()
@@ -2356,32 +2379,6 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             with open(os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/chinalist.json', 'wb') as ofile:
                 ofile.write(bkfile.read())
 
-    def option_switcher(self,items,target):
-        for x in items:
-            if x == target:
-                self.actions[x].setIconVisibleInMenu(True)
-            else:
-                self.actions[x].setIconVisibleInMenu(False)
-
-    def init_menu(self):
-        item = ['Auto','Global','Direct','Separator','AutoStartup','AllowUWP','Close']
-        for x in item:
-            if x == 'Separator':
-                self.tpmen.addSeparator()
-            elif x in self.actions:
-                self.tpmen.addAction(self.actions[x])
-
-    def change_mode(self,mode):
-        mes = {'Auto':'已设置为自动模式','Global':'已设置为全局模式','Direct':'已设置为直连模式'}
-        self.kill_daemon()
-        self.edit_preference('mode', mode.lower())
-        self.run(False)
-        self.pop_message(mes[mode])
-        self.set_mode_UI(mode)
-
-    def set_mode_UI(self,mode):
-        self.option_switcher(['Auto', 'Global', 'Direct'], mode)
-
     def text_translator(self,message):
         translations = {'成功连接': 'Successfully connected',
                         '连接已恢复': 'Connection restored',
@@ -2393,7 +2390,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                         '配置文件错误': 'Config Error',
                         '检测到运行中的Yashmak': 'Running Yashmak has detected',
                         '已允许UWP应用连接代理': 'UWP apps have been allowed to connect to the proxy',
-                        '已设置开机自启': 'Auto startup has been enabled', '已取消开机自启': 'Auto startup has been disabled',
+                        '已开启增强代理': 'Enhanced-proxy has been enabled', '已关闭增强代理': 'Enhanced-proxy has been disabled',
+                        '已设置开机自启': 'Auto-startup has been enabled', '已取消开机自启': 'Auto-startup has been disabled',
                         '已退出并断开连接': 'Exited and disconnected', '已设置为直连模式': 'Has set to Direct Mode',
                         '已设置为全局模式': 'Has set to Global Mode', '已设置为自动模式': 'Has set to Auto Mode',
                         ' 自动模式 ': ' Auto Mode', ' 全局模式 ':' Global Mode', ' 直连模式 ':' Direct Mode',
@@ -2407,12 +2405,6 @@ class yashmak_GUI(QtWidgets.QMainWindow):
 
     def pop_message(self,message):
         self.tp.showMessage('Yashmak', self.text_translator(message),msecs=1000)
-        """if self.is_light_Theme():
-            icon = 'C:/Users/Home/PycharmProjects/QYashmak/project/test.png'
-        else:
-            icon = 'C:/Users/Home/PycharmProjects/QYashmak/project/test2.png'
-        toast = winotify.Notification(app_id=' ',title='Yashmak',msg=self.translate(message),icon=icon)
-        toast.show()"""
 
 
 if __name__ == '__main__':
