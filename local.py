@@ -483,7 +483,7 @@ class ymc_http_parser:
 class ymc_dns_cache(ymc_base, ymc_connect):
     def __init__(self):
         self.dns_records, self.dns_futures_map = dict(), dict()
-        self.timeout_threshold = 600
+        self.timeout_threshold = 60
         self.dns_query_send_buffer = asyncio.queues.Queue()
 
     async def connect_dns_local(self):
@@ -501,15 +501,20 @@ class ymc_dns_cache(ymc_base, ymc_connect):
         if self.is_ip(host):
             host = host.replace(b'::ffff:', b'')
             return [host]
-        elif not force and host in self.dns_records and self.dns_records[host][1] > time.time():
+        elif not force and host in self.dns_records:
+            age = time.time() - self.dns_records[host][1]
+            if 0 < age <= 600:
+                self.loop.create_task(self.dns_query(host))
+            elif age > 600:
+                return await self.dns_query(host)
             return self.dns_records[host][0]
         return await self.dns_query(host)
 
     async def dns_query(self, host):
-        result = await self.dns_query_worker(host)
-        if result != None:
-            self.dns_records[host] = (result, time.time() + self.timeout_threshold)
-            return result
+        IPs, TTL = await self.dns_query_worker(host)
+        if IPs != None:
+            self.dns_records[host] = (IPs, time.time() + TTL)
+            return IPs
         else:
             raise Exception('No IP Error')
 
@@ -519,9 +524,9 @@ class ymc_dns_cache(ymc_base, ymc_connect):
             self.dns_futures_map[host].add(future)
         else:
             self.dns_futures_map[host] = {future}
-        await self.dns_query_send_buffer.put(host)
-        result = await asyncio.wait_for(future, timeout)
-        return result
+        if len(self.dns_futures_map[host]) == 1:
+            await self.dns_query_send_buffer.put(host)
+        return await asyncio.wait_for(future, timeout)
 
     async def dns_query_sender(self):
         while True:
@@ -539,33 +544,34 @@ class ymc_dns_cache(ymc_base, ymc_connect):
             buffer = buffer[position + 1:]
             for record in records:
                 data = record.split(b'\r')
-                host, data = data[0], data[1]
-                if data == b'None':
-                    result = None
-                elif data == b'No':
-                    result = []
+                host, IPs, TTL = data[0], data[1], float(data[2])
+                if IPs == b'None':
+                    result = (None, TTL)
+                elif IPs == b'No':
+                    result = ([], TTL)
                 else:
-                    result = data.split(b',')
+                    result = (IPs.split(b','), TTL)
                 if host in self.dns_futures_map:
-                    future = self.dns_futures_map[host].pop()
-                    future.set_result(result)
+                    while self.dns_futures_map[host]:
+                        future = self.dns_futures_map[host].pop()
+                        future.set_result(result)
 
     async def dns_clear_cache(self):
         while True:
             try:
                 for x in list(self.dns_records.keys()):
-                    if self.dns_records[x][1] < time.time():
+                    if self.dns_records[x][1] + 1200 < time.time():
                         del self.dns_records[x]
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                await self.sleep(int(self.timeout_threshold / 6))
+                await self.sleep(60)
 
 
 class ymc_internet_status_cache(ymc_base, ymc_connect):
     def __init__(self):
-        self.internet_status = False
+        self.internet_status = None
 
     def has_internet(self):
         return self.internet_status
@@ -585,8 +591,10 @@ class ymc_internet_status_cache(ymc_base, ymc_connect):
                     result = await asyncio.wait_for(server_reader.read(64),10)
                     if result == b'True':
                         self.internet_status = True
-                    else:
+                    elif result == b'False':
                         self.internet_status = False
+                    else:
+                        self.internet_status = None
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
@@ -595,7 +603,7 @@ class ymc_internet_status_cache(ymc_base, ymc_connect):
                 await self.sleep(1)
 
 
-class ymc_connect_remote_server(ymc_dns_cache):
+class ymc_connect_remote_server(ymc_dns_cache, ymc_internet_status_cache):
     def __init__(self):
         super().__init__()
         self.main_port_fail = 0
@@ -607,18 +615,19 @@ class ymc_connect_remote_server(ymc_dns_cache):
         else:
             ports = [self.get_calculated_port()]
         for port in ports:
-            try:
-                for IP in (await self.resolve(self.config['host'])):
-                    server_reader, server_writer = await self.open_connection(IP,port,True,self.config['host'],context=self.proxy_context)
+            for IP in await self.resolve(self.config['host']):
+                try:
+                    server_reader, server_writer = await self.open_connection(IP, port, True, self.config['host'],context=self.proxy_context)
+                    if len(ports) == 2:
+                        self.main_port_fail = 0
                     return server_reader, server_writer
-            except Exception as error:
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-                if port == self.config['port'] and self.has_internet():
-                    self.main_port_fail += 1
-                await self.clean_up(server_writer)
-        if server_reader == None or server_writer == None:
-            raise Exception
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+                    await self.clean_up(server_writer)
+        if self.has_internet() is True:
+            self.main_port_fail += 1
+        raise Exception
 
     def get_calculated_port(self):
         return 1024 + self.get_today() % 8976
@@ -712,7 +721,7 @@ class ymc_client_updater(ymc_base, ymc_http_parser, ymc_connect):
             error.__traceback__ = None
 
 
-class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_http_parser):
+class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
     def __init__(self, config, ID, response):
         try:
             #print(os.getpid(),'core')
@@ -781,7 +790,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
     async def switch_down(self, reader, writer):
         try:
             while True:
-                data = await reader.read(16384)
+                data = await reader.read(65535)
                 if data == b'':
                     raise Exception
                 await self.loop.sock_sendall(writer, data)
@@ -840,7 +849,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
     async def make_proxy(self,host,port,data,request_type,abroad,sock):
         server_reader, server_writer = None, None
         if not abroad:
-            IPs = await self.get_IPs(host, sock)
+            IPs = await self.get_IPs(host)
             for x in range(len(IPs)):
                 address = IPs[int(random.random() * 1000000 % len(IPs))]
                 if self.config['mode'] == 'auto' and not (self.is_china_ip(address) or self.is_local_ip(address)):
@@ -870,13 +879,11 @@ class yashmak_core(ymc_connect_remote_server, ymc_internet_status_cache, ymc_htt
             raise Exception('Fail to connect remote server')
         return server_reader, server_writer
 
-    async def get_IPs(self,host,sock,force=False):
+    async def get_IPs(self,host,force=False):
         try:
-            IPs = await self.resolve(host,force)
+            return await self.resolve(host,force)
         except Exception:
-            await self.http_response(sock, 502)
-            raise Exception('No IP Error')
-        return IPs
+            return []
 
     async def do_handshake(self,host,port):
         if len(self.connection_pool) == 0:
@@ -1139,8 +1146,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         self.config = config
         self.normal_context = self.init_normal_context()
         self.dns_records, self.dns_futures_map = dict(), dict()
-        self.dns_processing = set()
-        self.ipv4, self.ipv6 = True, True
+        self.ipv4, self.ipv6 = None, None
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -1150,7 +1156,6 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.create_server())
         self.loop.create_task(self.internet_refresh_cache())
-        self.loop.create_task(self.dns_refresh_cache())
         self.loop.create_task(self.dns_clear_cache())
         self.loop.run_forever()
 
@@ -1199,17 +1204,21 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
                 await client_writer.drain()
 
     async def dns_query_processor(self, host, dns_response_send_buffer):
-        dns_record = await self.auto_resolve(host)
-        if dns_record and dns_record != [None]:
+        IPs, TTL = await self.auto_resolve(host)
+        try:
+            float(str(TTL).encode('utf-8'))
+        except Exception as error:
+            TTL = 0
+        if IPs and IPs != [None]:
             buffer = b''
-            for x in dns_record:
+            for x in IPs:
                 buffer += x + b','
             buffer = buffer[:-1]
-            await dns_response_send_buffer.put(host + b'\r' + buffer)
-        elif dns_record == [None]:
-            await dns_response_send_buffer.put(host + b'\rNo')
+            await dns_response_send_buffer.put(host + b'\r' + buffer + b'\r' + str(TTL).encode('utf-8'))
+        elif IPs == [None]:
+            await dns_response_send_buffer.put(host + b'\rNo\r' + str(TTL).encode('utf-8'))
         else:
-            await dns_response_send_buffer.put(host + b'\rNone')
+            await dns_response_send_buffer.put(host + b'\rNone\r' + str(TTL).encode('utf-8'))
 
     async def internet_status(self, client_writer):
         while True:
@@ -1237,27 +1246,21 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
     def has_internet(self):
         if self.ipv4 or self.ipv6:
             return True
-        return False
+        if self.ipv4 is False and self.ipv6 is False:
+            return False
+        return None
 
     async def internet_refresh_cache(self):
-        self.internet_failure_counter = 0
         while True:
             s = time.time()
             try:
                 await asyncio.gather(self.has_ipv4(), self.has_ipv6())
-                if not self.ipv4 and not self.ipv6:
-                    self.internet_failure_counter += 1
-                else:
-                    self.internet_failure_counter = 0
-                    while self.dns_futures_map['internet']:
-                        future = self.dns_futures_map['internet'].pop()
-                        future.set_result(True)
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                if time.time() - s < 3:
-                    await self.sleep(3)
+                if time.time() - s < 10:
+                    await self.sleep(10)
 
     @staticmethod
     def is_ipv6(ip):
@@ -1277,29 +1280,40 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         elif self.ipv6:
             return await self.resolve('AAAA', host)
         else:
-            return []
+            return [], None
 
     async def resolve(self,q_type,host,doh=False):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
-            return [host]
-        elif host not in self.dns_processing and (host not in self.dns_records or time.time() >= self.dns_records[host][1] + 480):
-            await self.wait_until_has_internet()
+            return [host], 2147483647
+        elif host not in self.dns_records:
             await self.dns_query(host, doh)
-        await self.wait_until_has_record(host)
+        elif time.time() >= self.dns_records[host][1]:
+            await self.dns_query(host, doh)
         if host in self.dns_records:
-            self.dns_records[host] = (self.dns_records[host][0], self.dns_records[host][1], time.time() + 3600)
+            TTL = self.dns_records[host][2]
             if q_type != 'ALL':
-                return self.dns_records[host][0][q_type]
+                IPs = self.dns_records[host][0][q_type]
             else:
-                return self.dns_records[host][0]['A'] + self.dns_records[host][0]['AAAA']
+                IPs = self.dns_records[host][0]['A'] + self.dns_records[host][0]['AAAA']
+            return IPs, TTL
         else:
-            return []
+            return [], None
 
     async def dns_query(self,host,doh):
-        self.dns_processing.add(host)
-        for timeout in [0.5,1,1,2,4]:
-            ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', doh, timeout=timeout), self.dns_query_worker(host, 'AAAA', doh, timeout=timeout))
+        future = self.loop.create_future()
+        if host in self.dns_futures_map:
+            self.dns_futures_map[host].add(future)
+        else:
+            self.dns_futures_map[host] = {future}
+        if len(self.dns_futures_map[host]) == 1:
+            self.loop.create_task(self.dns_query_manager(host, doh))
+        await future
+
+    async def dns_query_manager(self,host,doh):
+        ipv4, ipv6 = None, None
+        for x in range(10):
+            ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', doh, timeout=0.2), self.dns_query_worker(host, 'AAAA', doh, timeout=0.2))
             if ipv4 or ipv6:
                 break
         if not ipv4 and not ipv6:
@@ -1311,9 +1325,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         if not ipv6:
             ipv6 = ([], 2147483647)
         if ipv4[0] or ipv6[0]:
-            result = {'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}
-            self.dns_records[host] = (result, time.time() + min(ipv4[1], ipv6[1], time.time() + 3600))
-        self.dns_processing.remove(host)
+            self.dns_records[host] = ({'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}, time.time() + min(ipv4[1], ipv6[1]), min(ipv4[1], ipv6[1]))
         if host in self.dns_futures_map:
             while self.dns_futures_map[host]:
                 future = self.dns_futures_map[host].pop()
@@ -1353,11 +1365,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
                 for y in result['answers']:
                     IPs.append(y['rdata'])
                     TTLs.append(y['q_ttl'])
-                if TTLs[0] < 120:
-                    TTL = 120
-                else:
-                    TTL = TTLs[0]
-                return IPs, TTL
+                return IPs, TTLs[0]
             elif result['error'] == 3 or result['error'] == 2:
                 return [None], 3600
         return None, None
@@ -1428,7 +1436,7 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
             return result, ID
         except Exception as error:
             if str(error) != 'timeout':
-                await self.sleep(timeout)
+                await self.sleep((lambda x: 1 if x < 1 else x)(timeout))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
         finally:
@@ -1450,64 +1458,23 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
         finally:
             await self.clean_up(server_writer)
 
-    async def dns_refresh_cache(self):
-        while True:
-            s = time.time()
-            try:
-                await self.wait_until_has_internet()
-                refreshable = []
-                for x in list(self.dns_records.keys()):
-                    if time.time() >= self.dns_records[x][1]:
-                        refreshable.append(x)
-                await self.dns_refresh_cache_worker(refreshable)
-            except Exception as error:
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-            finally:
-                if time.time() - s < 5:
-                    await self.sleep(5)
-
-    async def dns_refresh_cache_worker(self, refreshable):
-        for x in refreshable:
-            await self.wait_until_has_internet()
-            await self.wait_until_has_record(x)
-            await self.dns_query(x, self.dns_records[x][0]['doh'])
-
     async def dns_clear_cache(self):
         while True:
             try:
                 for x in list(self.dns_records.keys()):
-                    if time.time() >= self.dns_records[x][2]:
+                    if time.time() > self.dns_records[x][1]:
                         del self.dns_records[x]
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
             finally:
-                await self.sleep(60)
-
-    async def wait_until_has_internet(self):
-        if not self.has_internet():
-            future = self.loop.create_future()
-            if 'internet' in self.dns_futures_map:
-                self.dns_futures_map['internet'].add(future)
-            else:
-                self.dns_futures_map['internet'] = {future}
-            await future
-
-    async def wait_until_has_record(self, host):
-        if host in self.dns_processing and host not in self.dns_records:
-            future = self.loop.create_future()
-            if host in self.dns_futures_map:
-                self.dns_futures_map[host].add(future)
-            else:
-                self.dns_futures_map[host] = {future}
-            await future
+                await self.sleep(10)
 
     def exception_handler(self, loop, context):
         pass
 
 
-class yashmak_log(ymc_connect_remote_server, ymc_internet_status_cache):
+class yashmak_log(ymc_connect_remote_server):
     def __init__(self, config, response):
         try:
             #print(os.getpid(),'log')
@@ -1873,7 +1840,7 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
                 break
             await self.sleep(5)
         self.terminate_service()
-        self.response.put('Panic')
+        self.response.put('Child Process Accidentally Exit')
         await self.sleep(1)
         await self.suicide()
 
@@ -1886,15 +1853,11 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
         await self.suicide()
 
     async def send_feedback(self):
-        counter = 0
         while True:
-            if self.has_internet():
+            if self.has_internet() is True:
                 self.response.put('OK')
-                counter = 0
-            elif counter > 3:
+            elif self.has_internet() is False:
                 self.response.put('No internet connection')
-            else:
-                counter += 1
             await self.sleep(1)
 
     async def suicide(self):
@@ -1953,7 +1916,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             self.init_config()
             self.init_SystemTray_and_menu()
             self.show_SystemTray()
-            self.run()
+            self.run(False)
         except Exception as error:
             self.panic(error)
 
@@ -2000,26 +1963,29 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         self.init_menu_elements()
 
     def init_menu_elements(self):
-        ver = self.config['version']
-        if len(ver) == 3:
-            self.tp.setToolTip('Yashmak v'+ver[0]+'.'+ver[1]+'.'+ver[2])
-        elif len(ver) == 4:
-            self.tp.setToolTip('Yashmak v' + ver[:2] + '.' + ver[2] + '.' + ver[3])
-        else:
-            raise Exception('Illegal Version')
-        self.set_mode_UI(self.preference['mode'].lower())
-        if self.preference['startup'].lower() == 'auto':
-            self.set_auto_startup(True)
-            self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
-        elif self.preference['startup'].lower() == 'manual':
-            self.set_auto_startup(False)
-            self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
-        if self.preference['proxy'].lower() == 'enhanced':
-            self.set_enhanced_proxy(True)
-            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('correct.svg'))
-        elif self.preference['proxy'].lower() == 'normal':
-            self.set_enhanced_proxy(False)
-            self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('hook.svg'))
+        try:
+            ver = self.config['version']
+            if len(ver) == 3:
+                self.tp.setToolTip('Yashmak v' + ver[0] + '.' + ver[1] + '.' + ver[2])
+            elif len(ver) == 4:
+                self.tp.setToolTip('Yashmak v' + ver[:2] + '.' + ver[2] + '.' + ver[3])
+            else:
+                raise Exception('Illegal Version')
+            self.set_mode_UI(self.preference['mode'].lower())
+            if self.preference['startup'].lower() == 'auto':
+                self.set_auto_startup(True)
+                self.actions['AutoStartup'].setIcon(QtGui.QIcon('correct.svg'))
+            elif self.preference['startup'].lower() == 'manual':
+                self.set_auto_startup(False)
+                self.actions['AutoStartup'].setIcon(QtGui.QIcon('hook.svg'))
+            if self.preference['proxy'].lower() == 'enhanced':
+                self.set_enhanced_proxy(True)
+                self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('correct.svg'))
+            elif self.preference['proxy'].lower() == 'normal':
+                self.set_enhanced_proxy(False)
+                self.actions['EnhancedProxy'].setIcon(QtGui.QIcon('hook.svg'))
+        except KeyError as error:
+            raise Exception('配置文件错误 ' + str(error))
         self.init_menu()
 
     def show_SystemTray(self):
@@ -2047,7 +2013,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             'Close': QtGui.QAction(self.text_translator(' 退出 '), triggered=lambda: self.react('Close'))}
 
     def set_QSS(self):
-        if self.language == 'zh-Hans-CN':
+        if self.language == 'zh-CN':
             self.tpmen.setStyleSheet('''QMenu {background-color:#ffffff; font-size:10pt; font-family:Microsoft Yahei; color: #333333; border:2px solid #eeeeee; border-radius: 6px;}
                                    QMenu::item:selected {background-color:#eeeeee; color:#333333; padding:8px 10px 8px 10px; border:2px solid #eeeeee; border-radius:4;}
                                    QMenu::item {background-color:#ffffff;padding:8px 10px 8px 10px; border:2px solid #ffffff; border-radius:4;}
@@ -2085,7 +2051,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         mes = {'auto':'已设置为自动模式','global':'已设置为全局模式','direct':'已设置为直连模式'}
         self.kill_daemon()
         self.edit_preference('mode', mode.lower())
-        self.run(False)
+        self.run(True)
         self.pop_message(mes[mode])
         self.set_mode_UI(mode)
 
@@ -2148,7 +2114,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         if platform == 'win32':
             if enable:
                 self.set_key(self.INTERNET_SETTINGS, 'ProxyEnable', 1)
-                self.set_key(self.INTERNET_SETTINGS, 'ProxyOverride', "localhost;<local>")
+                self.set_key(self.INTERNET_SETTINGS, 'ProxyOverride', "localhost;192.168.1.1;<local>")
                 self.set_key(self.INTERNET_SETTINGS, 'ProxyServer','127.0.0.1:' + self.config[self.config['active']]['listen'])
                 self.set_key(self.ENVIRONMENT_SETTING, 'HTTP_PROXY','http://127.0.0.1:' + self.config[self.config['active']]['listen'])
                 self.set_key(self.ENVIRONMENT_SETTING, 'HTTPS_PROXY','http://127.0.0.1:' + self.config[self.config['active']]['listen'])
@@ -2235,18 +2201,18 @@ class yashmak_GUI(QtWidgets.QMainWindow):
     @staticmethod
     def detect_language():
         try:
-            USER_PROFILE = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Control Panel\International\User Profile', 0,winreg.KEY_ALL_ACCESS)
-            value, _ = winreg.QueryValueEx(USER_PROFILE, 'Languages')
+            USER_PROFILE = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Control Panel\Desktop\MuiCached', 0,winreg.KEY_ALL_ACCESS)
+            value, _ = winreg.QueryValueEx(USER_PROFILE, 'MachinePreferredUILanguages')
             return value
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            return ['']
+            return None
 
     def kill_daemon(self):
         try:
             self.response.put('kill')
-            while self.process1.is_alive():
+            while self.main_process.is_alive():
                 self.command.put('kill')
                 time.sleep(0.2)
         except Exception as error:
@@ -2258,7 +2224,7 @@ class yashmak_GUI(QtWidgets.QMainWindow):
         self.set_enhanced_proxy(False)
         self.kill_daemon()
 
-    def run(self, normal=True):
+    def run(self, restart=False):
         repaired = 0
         spares = ['chinalist.json','old.json']
         while True:
@@ -2272,84 +2238,68 @@ class yashmak_GUI(QtWidgets.QMainWindow):
             except Exception as error:
                 if 'Yashmak has already lunched' in str(error):
                     raise Exception('Yashmak has already lunched')
-            self.command = aioprocessing.AioQueue()
-            self.response = aioprocessing.AioQueue()
-            self.process1 = aioprocessing.AioProcess(target=yashmak_daemon, args=(self.command,self.response,))
-            self.process1.start()
+            self.command, self.response = aioprocessing.AioQueue(), aioprocessing.AioQueue()
+            self.main_process = aioprocessing.AioProcess(target=yashmak_daemon, args=(self.command,self.response,))
+            self.main_process.start()
             info = self.response.get()
-            T = threading.Thread(target=self.status_detector, args=(info,normal,))
-            T.start()
-            if info == 'OK' and self.process1.is_alive():
-                self.set_proxy(True)
-                break
-            elif info == 'No internet connection':
-                break
-            else:
-                self.process1.kill()
-                while T.is_alive():
-                    self.response.put('kill')
-                    time.sleep(0.2)
-            if info == 'Unable to run service' and repaired <= 1:
+            if 'yashmak_daemon:' in info and repaired <= 1:
                 self.repair(spares[repaired])
                 repaired += 1
-            elif 'while attempting to bind on address' in info:
-                raise Exception('Yashmak has already lunched')
             else:
-                raise Exception(info)
+                T = threading.Thread(target=self.daemon_thread, args=(restart,info,))
+                T.start()
+                break
 
-    def status_detector(self, info, normal):
-        connected = False
-        counter = 0
+    def daemon_thread(self, restart, info):
+        if info == 'OK':
+            self.set_proxy(True)
+            connected = True
+            if not restart:
+                self.message_successful()
+        else:
+            connected = False
         while True:
             if info == 'kill':
                 break
-            elif info == 'Panic':
-                self.panic(Exception('Child Process Accidentally Exit'))
-                break
-            elif info == 'OK' and self.process1.is_alive() and (not connected or not counter):
-                connected = True
-                if not counter and normal:
-                    self.message_successful()
-                elif counter:
+            elif info == 'OK':
+                if not connected:
+                    connected = True
                     self.pop_message('连接已恢复')
-            elif info == 'No internet connection' and (connected or not counter):
-                connected = False
-                if not counter:
-                    self.pop_message('连接失败')
-                else:
+            elif info == 'No internet connection':
+                if connected:
+                    connected = False
                     self.pop_message('连接已中断')
-            info = self.response.get()
+            else:
+                self.panic(Exception(info))
+                break
             time.sleep(0.2)
-            counter += 1
+            info = self.response.get()
 
     def message_successful(self):
         if os.path.exists(self.base_path + '/Config/new.json'):
             self.pop_message('Yashmak更新成功')
             os.remove(self.base_path + '/Config/new.json')
         else:
-            self.pop_message('成功连接')
+            self.pop_message('网络代理已启动')
 
     def panic(self, error):
         self.panic_log(str(error))
-        if 'Yashmak has already lunched' in str(error):
+        if 'Yashmak has already lunched' in str(error) or 'yashmak_load_balancer:' in str(error):
             self.kill_daemon()
             self.pop_message('检测到运行中的Yashmak')
-            time.sleep(2)
-            self.close_SystemTray()
-            raise Exception('EXIT')
-        elif 'Expecting value' in str(error):
+        elif 'yashmak_daemon:' in str(error):
             self.exit()
             self.pop_message('配置文件错误')
-            time.sleep(2)
-            raise Exception('EXIT')
         elif 'Child Process Accidentally Exit' in str(error):
-            self.set_proxy(False)
+            self.exit()
             self.pop_message('子进程意外退出')
         elif str(error) != 'EXIT':
             self.exit()
             self.pop_message('未知错误')
-            time.sleep(2)
-            raise Exception('EXIT')
+        time.sleep(2)
+        self.close_SystemTray()
+        while True:
+            os.kill(os.getpid(), signal.SIGTERM)
 
     @staticmethod
     def panic_log(error):
@@ -2380,9 +2330,8 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                 ofile.write(bkfile.read())
 
     def text_translator(self,message):
-        translations = {'成功连接': 'Successfully connected',
+        translations = {'网络代理已启动': 'Proxy started',
                         '连接已恢复': 'Connection restored',
-                        '连接失败': 'Failed to connect',
                         '连接已中断': 'Connection terminated',
                         'Yashmak更新成功': 'Yashmak successfully updated',
                         '未知错误': 'Unknown Error',
@@ -2390,13 +2339,13 @@ class yashmak_GUI(QtWidgets.QMainWindow):
                         '配置文件错误': 'Config Error',
                         '检测到运行中的Yashmak': 'Running Yashmak has detected',
                         '已允许UWP应用连接代理': 'UWP apps have been allowed to connect to the proxy',
-                        '已开启增强代理': 'Enhanced-proxy has been enabled', '已关闭增强代理': 'Enhanced-proxy has been disabled',
+                        '已开启增强代理': 'Enhanced Proxy has been enabled', '已关闭增强代理': 'Enhanced-proxy has been disabled',
                         '已设置开机自启': 'Auto-startup has been enabled', '已取消开机自启': 'Auto-startup has been disabled',
                         '已退出并断开连接': 'Exited and disconnected', '已设置为直连模式': 'Has set to Direct Mode',
                         '已设置为全局模式': 'Has set to Global Mode', '已设置为自动模式': 'Has set to Auto Mode',
                         ' 自动模式 ': ' Auto Mode', ' 全局模式 ':' Global Mode', ' 直连模式 ':' Direct Mode',
-                        ' 开机自启 ': ' Auto Startup', ' 允许UWP ': ' Allow UWP', ' 退出 ': ' Exit'}
-        if self.language == 'zh-Hans-CN':
+                        ' 开机自启 ': ' Auto Startup', ' 增强代理 ': ' Enhanced Proxy ', ' 允许UWP ': ' Allow UWP', ' 退出 ': ' Exit'}
+        if self.language == 'zh-CN':
             return message
         elif message in translations:
             return translations[message]
