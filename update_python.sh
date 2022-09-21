@@ -1,6 +1,6 @@
 #!/bin/bash
 path=$(cd "$(dirname "$0")";pwd)
-python_version="3.10.6"
+python_version="3.10.7"
 python_main_version="3.10"
 current_python_version=$(python$python_main_version -V)
 current_python_version=${current_python_version: 7}
@@ -29,7 +29,6 @@ install_python(){
   make -j $cpu_count && make install
   rm /usr/bin/python$python_main_version
   ln -s /usr/local/python-$python_version/bin/python$python_main_version /usr/bin/python$python_main_version
-  python$python_main_version -m pip install dnspython
   python$python_main_version -m pip install uvloop
   python$python_main_version -m pip install ntplib
   python$python_main_version -m pip install psutil
