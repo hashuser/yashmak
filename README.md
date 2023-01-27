@@ -1,4 +1,5 @@
-## Yashmak基于Python3.10轻量级代理 [English](https://github.com/hashuser/yashmak/blob/master/README_en.md)
+Language: [English](https://github.com/hashuser/yashmak/blob/master/README_en.md) [简体中文](https://github.com/hashuser/yashmak/blob/master/README.md)
+## Yashmak基于Python3.10轻量级代理
 * 流量智能分流（基于用户行为提高准确度）
 * 基于多进程uvloop框架，支持多核，承载海量并发
 * TCP预连接池，显著降低延迟（0-RTT）
