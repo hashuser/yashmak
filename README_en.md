@@ -16,6 +16,31 @@ sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.s
 ```
 sudo Yashmak_config
 ```
+```shell
+# Example
+{
+    "geoip": "/root/Yashmak/geoip.json",  # IP addresses of China
+    "blacklist": "/root/Yashmak/blacklist.json",  # Blacklist of domain
+    "hostlist": "/root/Yashmak/hostlist.json",
+    "cert": "/root/Yashmak/Certs/server.crt",  # ECC Public Key
+    "key": "/root/Yashmak/Certs/server.key",  # ECC Private Key
+    "uuid": [
+        "d240eb37-fc4d-4bce-9404-2b338eccdf07"  # UUID
+    ],
+    "normal_dns": [
+        "8.8.8.8",
+        "1.1.1.1",
+        "2001:4860:4860::8888",
+        "2606:4700:4700::1111"
+    ],
+    "doh_dns": [
+        "1.1.1.1",
+        "dns.google"
+    ],
+    "ip": "::",
+    "port": "443"
+}
+```
 ### Uninstall
 ```
 sudo Yashmak_uninstall
