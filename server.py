@@ -905,14 +905,14 @@ class yashmak():
         self.get_time()
 
     def run_forever(self):
-        # start log server
+        #start log server
         p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
         p.start()
-        # start normal workers
+        #start normal workers
         for x in range(os.cpu_count()):
             p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
-        # start spare workers
+        #start spare workers
         self.run_spares()
 
     def run_spares(self):
