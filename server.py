@@ -903,16 +903,17 @@ class yashmak():
         self.load_config()
         self.load_lists()
         self.get_time()
+        self.edit_iptables()
 
     def run_forever(self):
-        #start log server
+        # start log server
         p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
         p.start()
-        #start normal workers
+        # start normal workers
         for x in range(os.cpu_count()):
             p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
-        #start spare workers
+        # start spare workers
         self.run_spares()
 
     def run_spares(self):
@@ -942,6 +943,14 @@ class yashmak():
                 error.__traceback__ = None
         self.utc_difference = offset
         self.start_time = time.localtime()
+
+    def edit_iptables(self):
+        try:
+            os.system("iptables -P INPUT ACCEPT")
+            os.system("iptables -P OUTPUT ACCEPT")
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
 
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
