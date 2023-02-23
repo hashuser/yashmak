@@ -131,7 +131,6 @@ install_Yashmak(){
   apt-get install python$python_main_version -y
   apt-get install python3-pip -y
   apt-get install python3-distutils -y
-  python$python_main_version -m pip install dnspython
   python$python_main_version -m pip install uvloop
   python$python_main_version -m pip install ntplib
   python$python_main_version -m pip install psutil
