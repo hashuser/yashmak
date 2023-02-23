@@ -66,6 +66,11 @@ system_config(){
   echo "dns-nameservers 1.1.1.1" >> /etc/network/interfaces
   /etc/init.d/networking restart
   /etc/init.d/resolvconf restart
+  iptables -P INPUT ACCEPT
+  iptables -P OUTPUT ACCEPT
+  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | sudo debconf-set-selections
+  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | sudo debconf-set-selections
+  sudo apt-get -y install iptables-persistent
 }
 
 sign_cert(){
