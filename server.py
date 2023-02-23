@@ -1,6 +1,5 @@
 import asyncio
 import multiprocessing
-from dns import message
 import base64
 import socket
 import ssl
@@ -22,7 +21,183 @@ gc.set_threshold(100000, 50, 50)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
-class yashmak_worker():
+class ymc_dns_parser:
+    def dns_decoder(self, data, mq_type, ID, fast_mode=True):
+        if fast_mode:
+            return self._dns_decoder_fast(data, mq_type, ID)
+        return self._dns_decoder_debug(data, mq_type, ID)
+
+    def _dns_decoder_fast(self, data, mq_type, ID):
+        result = dict()
+        if isinstance(ID,bytes):
+            result['ID'] = data[:2]
+        else:
+            result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if result['ID'] != ID:
+            return {'error':-1}
+        result['flags'] = self._dns_get_flags_fast(data)
+        if not result['flags']['QR']:
+            return {'error':-1}
+        if result['flags']['rcode'] == 3:
+            return {'error':3}
+        elif result['flags']['rcode']:
+            return {'error':result['flags']['rcode']}
+        position = data.find(b'\xc0\x0c', 12)
+        if position == -1:
+            result['answers'] = []
+            result['error'] = None
+            return result
+        raw_answer = data[position:]
+        result['answers'] = self._dns_get_answers_fast(raw_answer,mq_type)
+        result['error'] = None
+        return result
+
+    def _dns_decoder_debug(self, data, mq_type, ID):
+        result = dict()
+        if isinstance(ID, bytes):
+            result['ID'] = data[:2]
+        else:
+            result['ID'] = int.from_bytes(data[:2], 'big', signed=False)
+        if result['ID'] != ID:
+            return {'error':-1}
+        result['flags'] = self._dns_get_flags_debug(data)
+        if not result['flags']['QR']:
+            return {'error':-1}
+        if result['flags']['rcode'] == 3:
+            return {'error':3}
+        elif result['flags']['rcode']:
+            return {'error':result['flags']['rcode']}
+        result['questions'] = int.from_bytes(data[4:6], 'big', signed=False)
+        result['answer_rrs'] = int.from_bytes(data[6:8], 'big', signed=False)
+        result['authority_rrs'] = int.from_bytes(data[8:10], 'big', signed=False)
+        result['additional_rrs'] = int.from_bytes(data[10:12], 'big', signed=False)
+        position = data.find(b'\xc0\x0c', 12)
+        if position == -1:
+            result['answers'] = []
+            result['queries'] = b''
+            result['error'] = None
+            return result
+        raw_queries = data[12:position]
+        result['queries'] = raw_queries
+        raw_answer = data[position:]
+        result['answers'] = self._dns_get_answers_debug(raw_answer,mq_type)
+        result['error'] = None
+        return result
+
+    @staticmethod
+    def _dns_get_answers_fast(raw_answer,mq_type):
+        answers, len_raw_answer, pe = [], len(raw_answer), 0
+        while True:
+            ps = pe + 10
+            if ps > len_raw_answer:
+                break
+            pe = ps + 2 + int.from_bytes(raw_answer[ps:ps + 2], 'big', signed=False)
+            q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
+            if mq_type == q_type:
+                if q_type == 1:
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                elif q_type == 28:
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                else:
+                    rdata = raw_answer[ps - 10:pe][12:]
+                q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
+                answers.append({'q_ttl': q_ttl, 'rdata': rdata})
+        return answers
+
+    @staticmethod
+    def _dns_get_answers_debug(raw_answer,mq_type):
+        answers, len_raw_answer, pe = [], len(raw_answer), 0
+        while True:
+            ps = pe + 10
+            if ps > len_raw_answer:
+                break
+            pe = ps + 2 + int.from_bytes(raw_answer[ps:ps + 2], 'big', signed=False)
+            q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
+            if mq_type == q_type:
+                if q_type == 1:
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                elif q_type == 28:
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                else:
+                    rdata = raw_answer[ps - 10:pe][12:]
+                q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
+                q_class = int.from_bytes(raw_answer[ps - 10:pe][4:6], 'big', signed=False)
+                answers.append({'q_type': q_type, 'q_class': q_class, 'q_ttl': q_ttl, 'rdata': rdata})
+        return answers
+
+    @staticmethod
+    def _dns_get_flags_fast(data):
+        flags = dict()
+        raw_flags = bin(int.from_bytes(data[2:4], 'big', signed=False))
+        if raw_flags[2] == '1':
+            flags['QR'] = True
+        else:
+            flags['QR'] = False
+        flags['rcode'] = int(raw_flags[14:], 2)
+        return flags
+
+    @staticmethod
+    def _dns_get_flags_debug(data):
+        flags = dict()
+        raw_flags = bin(int.from_bytes(data[2:4], 'big', signed=False))
+        if raw_flags[2] == '1':
+            flags['QR'] = True
+        else:
+            flags['QR'] = False
+        flags['opcode'] = int(raw_flags[3:7], 2)
+        if raw_flags[7] == '1':
+            flags['AA'] = True
+        else:
+            flags['AA'] = False
+        if raw_flags[8] == '1':
+            flags['TC'] = True
+        else:
+            flags['TC'] = False
+        if raw_flags[9] == '1':
+            flags['RD'] = True
+        else:
+            flags['RD'] = False
+        if raw_flags[10] == '1':
+            flags['RA'] = True
+        else:
+            flags['RA'] = False
+        if raw_flags[11] == '1':
+            flags['Z'] = True
+        else:
+            flags['Z'] = False
+        if raw_flags[12] == '1':
+            flags['AD'] = True
+        else:
+            flags['AD'] = False
+        if raw_flags[13] == '1':
+            flags['CD'] = True
+        else:
+            flags['CD'] = False
+        flags['rcode'] = int(raw_flags[14:], 2)
+        return flags
+
+    def dns_encoder(self, host, mq_type, fast_mode=True):
+        if fast_mode:
+            return self._make_query_fast(host, mq_type)
+        return False
+
+    @staticmethod
+    def _make_query_fast(host, mq_type):
+        ID = random.randbytes(2)
+        queries = ID + b'\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+        host = host.split(b'.')
+        for x in host:
+            queries += int.to_bytes(len(x), 1, 'big', signed=False) + x
+        if mq_type == 1:
+            queries += b'\x00\x00\x01\x00\x01'
+        elif mq_type == 28:
+            queries += b'\x00\x00\x1c\x00\x01'
+        elif mq_type == 5:
+            queries += b'\x00\x00\x05\x00\x01'
+        return queries, ID
+
+
+class yashmak_worker(ymc_dns_parser):
     def __init__(self,config,host_list,dns_pool,dns_ttl,geoip_list,exception_list_name,local_path,utc_difference,start_time):
         self.config = config
         self.normal_context = self.get_normal_context()
@@ -50,7 +225,7 @@ class yashmak_worker():
         return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_proxy_context())
 
     def create_loop(self):
-        self.loop = asyncio.get_event_loop()
+        self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.create_server())
         self.loop.create_task(self.write_host())
@@ -369,9 +544,6 @@ class yashmak_worker():
     def is_china_ip(self, ip, host, uuid):
         if self.is_ip(host):
             return False
-        for x in [b'google',b'youtube',b'wikipedia',b'twitter']:
-            if x in host:
-                return False
         ip = ip.decode('utf-8')
         ip = ip.replace('::ffff:','',1)
         ip = int(ipaddress.ip_address(ip))
@@ -379,7 +551,7 @@ class yashmak_worker():
         right = len(self.geoip_list) - 1
         while left <= right:
             mid = left + (right - left) // 2
-            if self.geoip_list[mid][0] <= ip and ip <= self.geoip_list[mid][1]:
+            if self.geoip_list[mid][0] <= ip <= self.geoip_list[mid][1]:
                 self.add_host(self.conclude(host), uuid)
                 return True
             elif self.geoip_list[mid][1] < ip:
@@ -429,25 +601,16 @@ class yashmak_worker():
     @staticmethod
     def conclude(data):
         def detect(data):
-            if data.count(b':') != 0 or data.count(b'.') <= 1:
-                return False
-            SLD = {b'com', b'net', b'org', b'gov',
-                   b'co', b'edu', b'uk', b'us', b'kr',
-                   b'au', b'hk', b'is', b'jpn', b'gb', b'gr'}
-            if data.split(b'.')[-2] in SLD and data.count(b'.') < 3:
-                return False
-            for x in data:
-                if x < 48 and x != 46 or x > 57:
-                    return True
+            if data.count(b'.') > 1:
+                return True
             return False
-
         if detect(data):
             return b'*' + data[data.find(b'.'):]
         else:
             return data
 
     def get_proxy_context(self):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.set_alpn_protocols(['http/1.1'])
         context.load_cert_chain(self.config['cert'], self.config['key'])
@@ -455,7 +618,7 @@ class yashmak_worker():
 
     @staticmethod
     def get_normal_context():
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.set_alpn_protocols(['http/1.1'])
         context.verify_mode = ssl.CERT_REQUIRED
@@ -508,31 +671,22 @@ class yashmak_worker():
         return (await self.query(host,doh))[q_type]
 
     async def query(self,host,doh):
-        ipv4 = None
-        ipv6 = None
-        for x in range(12):
+        for x in [0.5,1,1,2,4]:
             ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A', doh), self.query_worker(host, 'AAAA', doh))
-            if ipv4 != None and ipv6 != None:
+            if ipv4 or ipv6:
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(x)
+        if not ipv4:
+            ipv4 = []
+        if not ipv6:
+            ipv6 = []
         result = {'A':ipv4,'AAAA':ipv6,'ALL':ipv4+ipv6}
-        if ipv4 != None and ipv6 != None:
+        if ipv4 or ipv6:
             self.dns_pool[host] = result
             self.dns_ttl[host] = time.time()
         return result
 
     async def query_worker(self, host, q_type, doh):
-        try:
-            done, pending, = await asyncio.wait(await self.make_tasks(host, q_type, doh),return_when=asyncio.FIRST_COMPLETED)
-            for x in pending:
-                x.cancel()
-            result = message.from_wire(done.pop().result())
-            return self.decode(str(result), q_type)
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-
-    async def make_tasks(self, host, q_type, doh):
         try:
             if q_type == 'A':
                 mq_type = 1
@@ -540,35 +694,59 @@ class yashmak_worker():
                 mq_type = 28
             else:
                 raise Exception
-            query = message.make_query(host.decode('utf-8'), mq_type)
-            query = query.to_wire()
+            done, pending, = await asyncio.wait(await self.make_tasks(host, mq_type, doh),return_when=asyncio.FIRST_COMPLETED)
+            for x in pending:
+                x.cancel()
+            results = []
+            for x in range(len(done)):
+                result = done.pop().result()
+                if result:
+                    results.append(result)
+            if not results:
+                return None
+            for x in results:
+                result = self.dns_decoder(x[0],mq_type,x[1])
+                if result['error'] == None and result['answers']:
+                    IPs = []
+                    for y in result['answers']:
+                        IPs.append(y['rdata'])
+                    return IPs
+            return None
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    async def make_tasks(self, host, mq_type, doh):
+        try:
+            query, ID = self.dns_encoder(host,mq_type)
             tasks = []
             for x in self.config['normal_dns']:
-                tasks.append(asyncio.create_task(self.get_normal_query_response(query, (x, 53))))
+                tasks.append(asyncio.create_task(self.get_normal_query_response(query, ID, (x, 53))))
             if doh:
                 for x in self.config['doh_dns']:
                     v4 = await self.resolve('A', x, False)
                     v6 = await self.resolve('AAAA', x, False)
                     if v4 != []:
-                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v4[0], 443), x)))
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, ID, (v4[0], 443), x)))
                     if v6 != []:
-                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, (v6[0], 443), x)))
+                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, ID, (v6[0], 443), x)))
             return tasks
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def get_normal_query_response(self, query, address):
+    async def get_normal_query_response(self, query, ID, address):
         s = None
         try:
             if self.is_ipv6(address[0]):
                 s = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
             else:
                 s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setblocking(False)
             await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
             await self.loop.sock_sendall(s, query)
-            result = await asyncio.wait_for(self.loop.sock_recv(s, 4096),4)
-            return result
+            result = await asyncio.wait_for(self.loop.sock_recv(s, 512),4)
+            return result, ID
         except Exception as error:
             await asyncio.sleep(5)
             traceback.clear_frames(error.__traceback__)
@@ -577,7 +755,7 @@ class yashmak_worker():
         finally:
             await self.clean_up(s)
 
-    async def get_doh_query_response(self, query, address, hostname):
+    async def get_doh_query_response(self, query, ID, address, hostname):
         server_writer = None
         try:
             server_reader, server_writer = await asyncio.open_connection(host=address[0],
@@ -589,7 +767,7 @@ class yashmak_worker():
             await server_writer.drain()
             result = await asyncio.wait_for(server_reader.read(4096),4)
             result = result[result.find(b'\r\n\r\n')+4:]
-            return result
+            return result, ID
         except Exception as error:
             await asyncio.sleep(5)
             traceback.clear_frames(error.__traceback__)
@@ -597,18 +775,6 @@ class yashmak_worker():
             await self.clean_up(server_writer)
         finally:
             await self.clean_up(server_writer)
-
-    @staticmethod
-    def decode(result,type):
-        IPs = []
-        type = ' ' + type.upper() + ' '
-        position = result.find(type)
-        if position < 0:
-            return []
-        while position > 0:
-            IPs.append(result[position + len(type):result.find('\n', position)].encode('utf-8'))
-            position = result.find(type, position + len(type))
-        return IPs
 
     async def clear_cache(self):
         while 1:
@@ -630,9 +796,8 @@ class yashmak_worker():
 
 class yashmak_log():
     def __init__(self,start_time,local_path, port):
-        self.loop = asyncio.get_event_loop()
-        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET,
-                                            dualstack_ipv6=False)
+        self.loop = asyncio.new_event_loop()
+        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET, dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
         self.host_list = dict()
         self.log = []
@@ -740,14 +905,14 @@ class yashmak():
         self.get_time()
 
     def run_forever(self):
-        #start log server
+        # start log server
         p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
         p.start()
-        #start normal workers
+        # start normal workers
         for x in range(os.cpu_count()):
             p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
             p.start()
-        #start spare workers
+        # start spare workers
         self.run_spares()
 
     def run_spares(self):
