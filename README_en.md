@@ -7,6 +7,7 @@
 * Automatically issue TLS self-signed certificates
 * Support HTTP/Socks5 proxy protocol
 * Host blocking/redirection
+* IPv4/IPv6 Dual Stack
 
 ### Install (Ubuntu 18.04TLS+)
 ```
