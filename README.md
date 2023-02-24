@@ -8,6 +8,7 @@ Language: [English](https://github.com/hashuser/yashmak/blob/master/README_en.md
 * 自动签发TLS自签证书
 * 支持HTTP/Socks5代理协议
 * Host屏蔽/重定向
+* IPv4/IPv6 双协议栈
 
 ### 安装(Ubuntu 18.04TLS+)
 ```
