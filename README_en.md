@@ -20,9 +20,9 @@ sudo Yashmak_config
 ```shell
 # Example
 {
-    "geoip": "/root/Yashmak/geoip.json",  # IP addresses of China
+    "geoip": "/root/Yashmak/geoip.json",  # IP addresses of (eg. China)
     "blacklist": "/root/Yashmak/blacklist.json",  # Blacklist of domain
-    "hostlist": "/root/Yashmak/hostlist.json",
+    "hostlist": "/root/Yashmak/hostlist.json",  # Maps hostnames to IP addresses
     "cert": "/root/Yashmak/Certs/server.crt",  # ECC Public Key
     "key": "/root/Yashmak/Certs/server.key",  # ECC Private Key
     "uuid": [
@@ -38,8 +38,8 @@ sudo Yashmak_config
         "1.1.1.1",
         "dns.google"
     ],
-    "ip": "::",
-    "port": "443"
+    "ip": "::",  # Listening IP address
+    "port": "443"  # Listening Port
 }
 ```
 ### Uninstall
