@@ -948,6 +948,8 @@ class yashmak():
         try:
             os.system("iptables -P INPUT ACCEPT")
             os.system("iptables -P OUTPUT ACCEPT")
+            os.system("ip6tables -P INPUT ACCEPT")
+            os.system("ip6tables -P OUTPUT ACCEPT")
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
