@@ -64,6 +64,10 @@ sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_py
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
 ```
+### All-In-One(Ubuntu 18.04TLS+)
+```
+sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/all_in_one.sh | bash
+```
 ## Yashmak server architecture
 ![image](https://github.com/hashuser/yashmak/raw/master/recourse/server.png)
 ## Yashmak client architecture
