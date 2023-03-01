@@ -95,9 +95,9 @@ class ymc_dns_parser:
             q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
             if mq_type == q_type:
                 if q_type == 1:
-                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf-8')
                 elif q_type == 28:
-                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf-8')
                 else:
                     rdata = raw_answer[ps - 10:pe][12:]
                 q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
@@ -115,9 +115,9 @@ class ymc_dns_parser:
             q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
             if mq_type == q_type:
                 if q_type == 1:
-                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf-8')
                 elif q_type == 28:
-                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf-8')
                 else:
                     rdata = raw_answer[ps - 10:pe][12:]
                 q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
