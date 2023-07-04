@@ -9,12 +9,12 @@ Language: [English](https://github.com/hashuser/yashmak/blob/master/README_en.md
 * 支持HTTP/Socks5代理协议
 * Host屏蔽/重定向
 * IPv4/IPv6 双协议栈
-
-### 安装(Ubuntu 18.04TLS+)
+## 服务端
+>### 安装(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/install.sh | bash
 ``` 
-### 配置
+>### 配置
 ```
 sudo Yashmak_config
 ```
@@ -43,30 +43,30 @@ sudo Yashmak_config
     "port": "443"  # Listening Port
 }
 ```
-### 卸载
+>### 卸载
 ```
 sudo Yashmak_uninstall
 ```
-### 重启
+>### 重启
 ```
 sudo systemctl restart Yashmak
 ```
 
 ## 如无法获取最新版本GCC/G++，将先编译GCC/G++，更新会耗费较长时间
 
-### OpenSSL更新(Ubuntu 18.04TLS+)
+>### OpenSSL更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_openssl.sh | bash
 ``` 
-### Python更新(Ubuntu 18.04TLS+)
+>### Python更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_python.sh | bash
 ```
-### GCC更新(Ubuntu 18.04TLS+)
+>### GCC更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
 ```
-### All-In-One(Ubuntu 18.04TLS+)
+>### All-In-One(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/all_in_one.sh | bash
 ```
