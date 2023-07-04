@@ -1,5 +1,5 @@
 #!/bin/bash
-gcc_version="12.2.0"
+gcc_version="13.1.0"
 path=$(cd "$(dirname "$0")";pwd)
 current_gcc_version=$(gcc -dumpversion)
 current_gpp_version=$(g++ -dumpversion)
@@ -31,8 +31,12 @@ install_gcc(){
   gcc --version
   update-alternatives --remove gcc /usr/local/gcc-$gcc_version/bin/gcc
   update-alternatives --remove g++ /usr/local/gcc-$gcc_version/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-12.2.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-12.2.0/bin/g++
   update-alternatives --remove gcc /usr/local/gcc-12.1.0/bin/gcc
   update-alternatives --remove g++ /usr/local/gcc-12.1.0/bin/g++
+  update-alternatives --remove gcc /usr/local/gcc-11.4.0/bin/gcc
+  update-alternatives --remove g++ /usr/local/gcc-11.4.0/bin/g++
   update-alternatives --remove gcc /usr/local/gcc-11.3.0/bin/gcc
   update-alternatives --remove g++ /usr/local/gcc-11.3.0/bin/g++
   update-alternatives --remove gcc /usr/local/gcc-11.2.0/bin/gcc
