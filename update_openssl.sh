@@ -1,5 +1,5 @@
 #!/bin/bash
-openssl_version="1_1_1t"
+openssl_version="1_1_1u"
 path=$(cd "$(dirname "$0")";pwd)
 cpu_count=$(( $(cat /proc/cpuinfo |grep "processor"|wc -l) - 1 ))
 if [[ $cpu_count < "1" ]]
