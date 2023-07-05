@@ -1,5 +1,5 @@
 #!/bin/bash
-python_main_version="3.10"
+python_main_version="3.11"
 
 create_service(){
   touch $(cd "$(dirname "$0")";pwd)/Yashmak_client.service
