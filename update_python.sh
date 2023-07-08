@@ -39,33 +39,27 @@ install_python(){
 }
 
 main(){
-  array0=(${python_version//./ })
-  array1=(${current_python_version//./ })
+  array0=(${python_version//./ })     # Split at periods
+  rc0=$(echo ${array0[2]} | grep -o 'rc')  # Extract 'rc' if exists
+  rc0_num=$(echo ${array0[2]} | grep -o '[0-9]*$')  # Extract rc number if exists
+  array0[2]=$(echo ${array0[2]} | grep -o '^[0-9]*')  # Strip non-numerical characters at beginning
 
-  if [[ $((${array0[0]})) -gt $((${array1[0]})) ]]
+  array1=(${current_python_version//./ })
+  rc1=$(echo ${array1[2]} | grep -o 'rc')
+  rc1_num=$(echo ${array1[2]} | grep -o '[0-9]*$')
+  array1[2]=$(echo ${array1[2]} | grep -o '^[0-9]*')
+
+  if [[ $((${array0[0]})) -gt $((${array1[0]})) ]] || \
+     ([[ $((${array0[0]})) -eq $((${array1[0]})) ]] && ([[ $((${array0[1]})) -gt $((${array1[1]})) ]] || \
+     ([[ $((${array0[1]})) -eq $((${array1[1]})) ]] && ([[ $((${array0[2]})) -gt $((${array1[2]})) ]] || \
+     ([[ $((${array0[2]})) -eq $((${array1[2]})) ]] && [[ -n "$rc0" ]] && [[ -z "$rc1" ]] || \
+     ([[ "$rc0" == "$rc1" ]] && [[ "$rc0_num" -gt "$rc1_num" ]] || \
+     ([[ $((${array0[2]})) -lt $((${array1[2]})) ]] && [[ -n "$rc0" ]]))))))
   then
-          echo "update required"
-          install_python
-  elif [[ $((${array0[0]})) -eq $((${array1[0]})) ]]
-  then
-          if [[ $((${array0[1]})) -gt $((${array1[1]})) ]]
-          then
-                  echo "update required"
-                  install_python
-          elif [[ $((${array0[1]})) -eq $((${array1[1]})) ]]
-          then
-                  if [[ $((${array0[2]})) -gt $((${array1[2]})) ]]
-                  then
-                          echo "update required"
-                          install_python
-                  else
-                          echo "up to date"
-                  fi
-          else
-                  echo "up to date"
-          fi
+        echo "update required"
+        install_python
   else
-          echo "up to date"
+        echo "up to date"
   fi
 }
 
