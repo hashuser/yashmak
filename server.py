@@ -818,33 +818,6 @@ class yashmak_worker(ymc_connect_remote_server):
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    @staticmethod
-    async def clean_up(writer1=None, writer2=None):
-        try:
-            if writer1 != None:
-                writer1.close()
-        except BaseException as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-        try:
-            if writer2 != None:
-                writer2.close()
-        except BaseException as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-        try:
-            if writer1 != None:
-                await writer1.wait_closed()
-        except BaseException as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-        try:
-            if writer2 != None:
-                await writer2.wait_closed()
-        except BaseException as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-
     def exception_handler(self, loop, context):
         pass
 
@@ -1476,7 +1449,9 @@ class yashmak():
     def find_ports(self):
         ports = set()
         while len(ports) < 1:
-            R = str(random.randint(2000,8000))
+            R = str(random.randint(2000, 8000))
+            if int(R) == self.config['port'] or int(R) == self.config['port'] + 1:
+                continue
             if "windows" in platform.system().lower():
                 if os.popen("netstat -aon | findstr 127.0.0.1:" + R).read() == "" and os.popen("netstat -aon | findstr [::1]:" + R).read() == "":
                     ports.add(int(R))
