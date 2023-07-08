@@ -21,9 +21,9 @@ sudo Yashmak_config
 ```shell
 # Example
 {
-    "geoip": "/root/Yashmak/geoip.json",  # IP addresses of (eg. China)
-    "blacklist": "/root/Yashmak/blacklist.json",  # Blacklist of domain
-    "hostlist": "/root/Yashmak/hostlist.json",  # Maps hostnames to IP addresses
+    "geoip_list_path": "/root/Yashmak/geoip.json",  # IP addresses of (eg. China)
+    "black_list_path": "/root/Yashmak/blacklist.json",  # Blacklist of domain
+    "host_list_path": "/root/Yashmak/hostlist.json",  # Maps hostnames to IP addresses
     "cert": "/root/Yashmak/Certs/server.crt",  # ECC Public Key
     "key": "/root/Yashmak/Certs/server.key",  # ECC Private Key
     "uuid": [
