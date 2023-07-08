@@ -16,9 +16,189 @@ import uvloop
 import random
 import gc
 import psutil
+import platform
 
 gc.set_threshold(100000, 50, 50)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+
+class ymc_base:
+    @staticmethod
+    async def clean_up(writer1=None, writer2=None):
+        try:
+            if writer1 != None:
+                writer1.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                writer2.close()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer1 != None:
+                await writer1.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        try:
+            if writer2 != None:
+                await writer2.wait_closed()
+        except BaseException as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    @staticmethod
+    def set_priority(level):
+        p = psutil.Process(os.getpid())
+        if "windows" in platform.system().lower():
+            if level.lower() == 'real_time':
+                p.nice(psutil.REALTIME_PRIORITY_CLASS)
+            elif level.lower() == 'high':
+                p.nice(psutil.HIGH_PRIORITY_CLASS)
+            elif level.lower() == 'above_normal':
+                p.nice(psutil.ABOVE_NORMAL_PRIORITY_CLASS)
+            elif level.lower() == 'normal':
+                p.nice(psutil.NORMAL_PRIORITY_CLASS)
+            elif level.lower() == 'below_normal':
+                p.nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
+            elif level.lower() == 'idle':
+                p.nice(psutil.IDLE_PRIORITY_CLASS)
+            else:
+                raise Exception('Unexpected value')
+        elif "linux" in platform.system().lower():
+            if level.lower() == 'real_time':
+                p.nice(-20)
+            elif level.lower() == 'high':
+                p.nice(-10)
+            elif level.lower() == 'above_normal':
+                p.nice(-5)
+            elif level.lower() == 'normal':
+                p.nice(0)
+            elif level.lower() == 'below_normal':
+                p.nice(5)
+            elif level.lower() == 'idle':
+                p.nice(20)
+            else:
+                raise Exception('Unexpected value')
+        else:
+            raise Exception('Unsupported Platform')
+
+    @staticmethod
+    def is_ip(host):
+        try:
+            if b':' in host or int(host[host.rfind(b'.') + 1:]):
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
+
+    @staticmethod
+    def translate(content):
+        return content.replace('\\', '/')
+
+    @staticmethod
+    def encode(data):
+        return data.encode('utf-8')
+
+    @staticmethod
+    def decode(data):
+        return data.decode('utf-8')
+
+    @staticmethod
+    def base64_encode(data):
+        if isinstance(data,str):
+            data = data.encode('utf-8')
+            return base64.b64encode(data).decode('utf-8')
+        return base64.b64encode(data)
+
+    @staticmethod
+    def base64_decode(data):
+        if isinstance(data,str):
+            data = data.encode('utf-8')
+            return base64.b64decode(data).decode('utf-8')
+        return base64.b64decode(data)
+
+    @staticmethod
+    async def sleep(sec):
+        if sec <= 1:
+            await asyncio.sleep(sec)
+        else:
+            B = time.time()
+            while time.time() - B < sec:
+                S = time.time()
+                await asyncio.sleep(1)
+                E = time.time()
+                if E - S > 2:
+                    return True
+            return False
+
+    @staticmethod
+    def enhanced_base64_encode(s):
+        if isinstance(s,str):
+            s = s.encode('utf-8')
+        a = base64.b64encode(s)
+        rand = int.from_bytes(random.randbytes(len(a) + 1), 'little')
+        b = base64.b64encode(int.to_bytes(rand + int.from_bytes(a, 'little'), len(a) + 2, 'little'))
+        c = base64.b64encode(int.to_bytes(rand, len(a) + 1, 'little'))
+        d = base64.b64encode(int.to_bytes(len(c), 3, 'little')) + c + b
+        return base64.b64encode(d)
+
+    @staticmethod
+    def enhanced_base64_decode(s):
+        if isinstance(s,str):
+            s = s.encode('utf-8')
+        a = base64.b64decode(s)
+        b = int.from_bytes(base64.b64decode(a[0:4]), 'little')
+        rand = int.from_bytes(base64.b64decode(a[4:b + 4]), 'little')
+        c = int.from_bytes(base64.b64decode(a[b + 4:]), 'little')
+        d = int.to_bytes(c - rand, len(base64.b64decode(a[4:b + 4])) - 1, 'little')
+        return base64.b64decode(d)
+
+
+class ymc_ssl_context:
+    @staticmethod
+    def init_normal_context():
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.set_alpn_protocols(['http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_default_certs()
+        return context
+
+    def init_proxy_context(self):
+        self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['h2', 'http/1.1'])
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_verify_locations(self.config_path + self.config['cert'])
+        return context
+
+
+class ymc_connect(ymc_ssl_context):
+    async def open_connection(self,host,port,TLS=False,server_hostname=None,ssl_handshake_timeout=5,timeout=5,retry=1,context=None):
+        for x in range(retry):
+            try:
+                if TLS:
+                    if context == None:
+                        context = self.init_normal_context()
+                    if server_hostname == None:
+                        server_hostname = host
+                    return await asyncio.wait_for(asyncio.open_connection(host=host, port=port, ssl=context,
+                                                                          server_hostname=server_hostname,
+                                                                          ssl_handshake_timeout=ssl_handshake_timeout),timeout)
+                else:
+                    return await asyncio.wait_for(asyncio.open_connection(host=host, port=port), timeout)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+        raise Exception('Too many attempts')
 
 
 class ymc_dns_parser:
@@ -95,9 +275,9 @@ class ymc_dns_parser:
             q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
             if mq_type == q_type:
                 if q_type == 1:
-                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf-8')
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
                 elif q_type == 28:
-                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf-8')
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
                 else:
                     rdata = raw_answer[ps - 10:pe][12:]
                 q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
@@ -115,9 +295,9 @@ class ymc_dns_parser:
             q_type = int.from_bytes(raw_answer[ps - 10:pe][2:4], 'big', signed=False)
             if mq_type == q_type:
                 if q_type == 1:
-                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf-8')
+                    rdata = socket.inet_ntop(socket.AF_INET, raw_answer[ps - 10:pe][12:]).encode('utf=8')
                 elif q_type == 28:
-                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf-8')
+                    rdata = socket.inet_ntop(socket.AF_INET6, raw_answer[ps - 10:pe][12:]).encode('utf=8')
                 else:
                     rdata = raw_answer[ps - 10:pe][12:]
                 q_ttl = int.from_bytes(raw_answer[ps - 10:pe][6:10], 'big', signed=False)
@@ -197,22 +377,192 @@ class ymc_dns_parser:
         return queries, ID
 
 
-class yashmak_worker(ymc_dns_parser):
-    def __init__(self,config,host_list,dns_pool,dns_ttl,geoip_list,exception_list_name,local_path,utc_difference,start_time):
+class ymc_dns_cache(ymc_base, ymc_connect):
+    def __init__(self):
+        self.dns_records, self.dns_futures_map = dict(), dict()
+        self.dns_query_send_buffer = asyncio.Queue()
+
+    async def connect_dns_local(self):
+        if socket.has_dualstack_ipv6():
+            localhost = '::1'
+        else:
+            localhost = '127.0.0.1'
+        while True:
+            try:
+                self.dns_local_reader, self.dns_local_writer = await self.open_connection(localhost,self.config['dns_port'])
+            except Exception as error:
+                if not 'Too many attempts' in str(error):
+                    raise 'Too many attempts'
+            else:
+                break
+        self.dns_local_writer.write(b'8f1f5d11-98bc-42de-a996-e86c8c0cdf7f')
+        await self.dns_local_writer.drain()
+        asyncio.create_task(self.dns_query_sender())
+        asyncio.create_task(self.dns_response_receiver())
+
+    async def resolve(self, host, force=False):
+        if self.is_ip(host):
+            host = host.replace(b'::ffff:', b'')
+            return [host]
+        elif not force and host in self.dns_records:
+            age = time.time() - self.dns_records[host][1]
+            if 0 < age <= 600:
+                asyncio.create_task(self.dns_query(host))
+            elif age > 600:
+                return await self.dns_query(host)
+            return self.dns_records[host][0]
+        return await self.dns_query(host)
+
+    async def dns_query(self, host):
+        IPs, TTL = await self.dns_query_worker(host)
+        if IPs != None:
+            self.dns_records[host] = (IPs, time.time() + TTL)
+            return IPs
+        else:
+            raise Exception('No IP Error')
+
+    async def dns_query_worker(self, host, timeout=10):
+        future = asyncio.get_running_loop().create_future()
+        if host in self.dns_futures_map:
+            self.dns_futures_map[host].add(future)
+        else:
+            self.dns_futures_map[host] = {future}
+        if len(self.dns_futures_map[host]) == 1:
+            await self.dns_query_send_buffer.put(host)
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except TimeoutError:
+            while self.dns_futures_map[host]:
+                future = self.dns_futures_map[host].pop()
+                future.set_result((None, 0))
+            return None, 0
+
+    async def dns_query_sender(self):
+        while True:
+            buffer = await self.dns_query_send_buffer.get() + b'\n'
+            if buffer:
+                self.dns_local_writer.write(buffer)
+                await self.dns_local_writer.drain()
+
+    async def dns_response_receiver(self):
+        buffer = b''
+        while True:
+            buffer += await self.dns_local_reader.read(65535)
+            position = buffer.rfind(b'\n')
+            records = buffer[:position].split(b'\n')
+            buffer = buffer[position + 1:]
+            for record in records:
+                data = record.split(b'\r')
+                host, IPs, TTL, timestamp = data[0], data[1], float(data[2]), float(data[3])
+                if timestamp + 10 < time.time():
+                    result = (None, TTL)
+                elif IPs == b'None':
+                    result = (None, TTL)
+                elif IPs == b'No':
+                    result = ([], TTL)
+                else:
+                    result = (IPs.split(b','), TTL)
+                if host in self.dns_futures_map:
+                    while self.dns_futures_map[host]:
+                        future = self.dns_futures_map[host].pop()
+                        future.set_result(result)
+
+    async def dns_clear_cache(self):
+        while True:
+            try:
+                for x in list(self.dns_records.keys()):
+                    if self.dns_records[x][1] + 1200 < time.time():
+                        del self.dns_records[x]
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
+                await self.sleep(60)
+
+
+class ymc_internet_status_cache(ymc_base, ymc_connect):
+    def __init__(self):
+        self.internet_status = None
+
+    def has_internet(self):
+        return self.internet_status
+
+    async def internet_refresh_cache(self):
+        while True:
+            server_writer = None
+            try:
+                if socket.has_dualstack_ipv6():
+                    localhost = '::1'
+                else:
+                    localhost = '127.0.0.1'
+                server_reader, server_writer = await self.open_connection(localhost, self.config['dns_port'])
+                server_writer.write(b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83')
+                await server_writer.drain()
+                while True:
+                    result = await asyncio.wait_for(server_reader.read(64),10)
+                    if result == b'True':
+                        self.internet_status = True
+                    elif result == b'False':
+                        self.internet_status = False
+                    else:
+                        self.internet_status = None
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
+                await self.clean_up(server_writer)
+                await self.sleep(1)
+
+
+class ymc_connect_remote_server(ymc_dns_cache, ymc_internet_status_cache):
+    def __init__(self):
+        super().__init__()
+        self.main_port_fail = 0
+
+    async def connect_proxy_server(self):
+        server_reader, server_writer = None, None
+        if self.main_port_fail <= 100:
+            ports = [self.config['port'], self.get_calculated_port()]
+        else:
+            ports = [self.get_calculated_port()]
+        for port in ports:
+            for IP in await self.resolve(self.config['host']):
+                try:
+                    server_reader, server_writer = await self.open_connection(IP, port, True, self.config['host'],context=self.proxy_context)
+                    if len(ports) == 2:
+                        self.main_port_fail = 0
+                    return server_reader, server_writer
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
+                    await self.clean_up(server_writer)
+        if self.has_internet() is True:
+            self.main_port_fail += 1
+        raise Exception
+
+    def get_calculated_port(self):
+        return 1024 + self.get_today() % 8976
+
+    @staticmethod
+    def get_today():
+        today = int(str(datetime.datetime.utcnow())[:10].replace('-', '')) ** 3
+        return int(str(today)[today % 8:8] + str(today)[0:today % 8])
+
+
+class yashmak_worker(ymc_connect_remote_server):
+    def __init__(self,config):
+        super().__init__()
         self.config = config
         self.normal_context = self.get_normal_context()
-        self.host_list = host_list
-        self.geoip_list = geoip_list
-        self.dns_pool = dns_pool
-        self.dns_ttl = dns_ttl
-        self.exception_list_name = exception_list_name
-        self.local_path = local_path
-        self.utc_difference = utc_difference
-        self.start_time = start_time
-        self.ipv4 = True
-        self.ipv6 = True
+        self.host_list = self.config['host_list']
+        self.black_list = self.config['black_list']
+        self.geoip_list = self.config['geoip_list']
+        self.dns_records = self.config['dns_records']
+        self.local_path = self.config['local_path']
+        self.utc_difference = self.config['utc_difference']
+        self.start_time = self.config['start_time']
         self.log = []
-        self.set_priority()
+        self.set_priority('above_normal')
         self.create_loop()
 
     def create_server(self):
@@ -230,16 +580,8 @@ class yashmak_worker(ymc_dns_parser):
         self.loop.create_task(self.create_server())
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
-        self.loop.create_task(self.updater_cache())
-        self.loop.create_task(self.clear_cache())
-        self.loop.create_task(self.ipv4_test())
-        self.loop.create_task(self.ipv6_test())
+        self.loop.create_task(self.connect_dns_local())
         self.loop.run_forever()
-
-    @staticmethod
-    def set_priority():
-        p = psutil.Process(os.getpid())
-        p.nice(-10)
 
     async def handler(self, client_reader, client_writer):
         server_reader, server_writer = None, None
@@ -251,7 +593,7 @@ class yashmak_worker(ymc_dns_parser):
                 self.log.append(str((peer, str(header)[2:-1])).replace('\\\\r','\r').replace('\\\\n', '\n'))
                 raise Exception
             data = 0
-            while 1:
+            while True:
                 data = int.from_bytes((await asyncio.wait_for(client_reader.readexactly(2),20)), 'big',signed=True)
                 if data == 0:
                     continue
@@ -259,7 +601,7 @@ class yashmak_worker(ymc_dns_parser):
                     data = await asyncio.wait_for(client_reader.readexactly(data),20)
                     host, port = self.process(data)
                     await self.redirect(client_writer, host)
-                    await self.proxy(host,port,uuid,client_reader,client_writer)
+                    await self.proxy(host, port, uuid, client_reader, client_writer)
                 elif data == -4:
                     await self.echo(client_writer)
                 elif data == -2:
@@ -290,31 +632,27 @@ class yashmak_worker(ymc_dns_parser):
     async def make_proxy(self,host,port,uuid):
         server_reader, server_writer = None, None
         IPs = await self.get_IPs(host)
-        IPs_length = len(IPs)
-        for x in range(IPs_length):
-            address = IPs[int(random.random() * 1000 % IPs_length)]
+        for x in range(len(IPs)):
+            address = IPs[int(random.random() * 1000 % len(IPs))]
             self.is_china_ip(address, host, uuid)
-            server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=address, port=port), 5)
-            break
+            try:
+                server_reader, server_writer = await self.open_connection(address, port)
+                break
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
         if server_reader == None or server_writer == None:
             raise Exception
-        return server_reader,server_writer
+        return server_reader, server_writer
 
     async def make_switches(self,cr,cw,sr,sw):
         return [asyncio.create_task(self.switch(cr,sw)),asyncio.create_task(self.switch(sr,cw))]
 
-    async def get_IPs(self,host):
-        if self.ipv4 and self.ipv6:
-            IPs = await self.resolve('ALL', host)
-        elif self.ipv4:
-            IPs = await self.resolve('A', host)
-        elif self.ipv6:
-            IPs = await self.resolve('AAAA', host)
-        else:
-            raise Exception('No IP Error')
-        if IPs == None or IPs == []:
-            raise Exception
-        return IPs
+    async def get_IPs(self,host,force=False):
+        try:
+            return await self.resolve(host,force)
+        except Exception:
+            return []
 
     @staticmethod
     def HTTP_header_decoder(header):
@@ -358,7 +696,7 @@ class yashmak_worker(ymc_dns_parser):
         return 404
 
     async def get_complete_header(self, header, reader, writer):
-        while 1:
+        while True:
             try:
                 result = self.HTTP_header_decoder(header)
                 if b'\r\n\r\n' in header and result == 404:
@@ -399,7 +737,7 @@ class yashmak_worker(ymc_dns_parser):
 
     async def switch(self, reader, writer):
         try:
-            while 1:
+            while True:
                 data = await reader.read(32768)
                 if data == b'':
                     raise Exception
@@ -434,10 +772,10 @@ class yashmak_worker(ymc_dns_parser):
 
     async def redirect(self, writer, host):
         try:
-            URL = self.host_list[b'blacklist'][self.is_banned(host)]
+            URL = self.black_list[self.is_banned(host)]
             if URL != None:
-                if URL[0:4] != b'http' and URL in self.host_list[b'blacklist']['tag']:
-                    URL = self.host_list[b'blacklist']['tag'][URL]
+                if URL[0:4] != b'http' and URL in self.black_list['tag']:
+                    URL = self.black_list['tag'][URL]
                 if URL[0:4] == b'http':
                     writer.write(b'''HTTP/1.1 301 Moved Permanently\r\nLocation: ''' + URL + b'''\r\nConnection: close\r\n\r\n''')
                 else:
@@ -468,7 +806,7 @@ class yashmak_worker(ymc_dns_parser):
     async def updater_cache(self):
         try:
             self.exception_list_cache = dict()
-            while 1:
+            while True:
                 for uuid in self.config['uuid']:
                     path = self.local_path + '/Cache/' + uuid.decode('utf-8') + '.json'
                     if os.path.exists(path):
@@ -522,16 +860,6 @@ class yashmak_worker(ymc_dns_parser):
         return host, port
 
     @staticmethod
-    def is_ip(host):
-        try:
-            if b':' in host or int(host[host.rfind(b'.') + 1:]):
-                return True
-        except ValueError as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-        return False
-
-    @staticmethod
     def is_ipv6(ip):
         try:
             if b':' in ip and b'::ffff:' not in ip:
@@ -561,14 +889,14 @@ class yashmak_worker(ymc_dns_parser):
         return False
 
     def is_banned(self, host):
-        if host in self.host_list[b'blacklist']:
+        if host in self.black_list:
             return host
         sigment_length = len(host)
-        while 1:
+        while True:
             sigment_length = host.rfind(b'.', 0, sigment_length) - 1
             if sigment_length <= -1:
                 break
-            if host[sigment_length + 1:] in self.host_list[b'blacklist']:
+            if host[sigment_length + 1:] in self.black_list:
                 return host[sigment_length + 1:]
         return None
 
@@ -578,25 +906,37 @@ class yashmak_worker(ymc_dns_parser):
         self.host_list[uuid].add(host)
 
     async def write_host(self):
-        while 1:
-            for x in self.host_list:
-                if x != b'blacklist' and len(self.host_list[x]) > 0:
-                    server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1', port=self.config['port']+1),5)
-                    server_writer.write(str(list(self.host_list[x])).encode('utf-8')+b'\r\n'+x+b'\r\nhost\r\n\r\n')
-                    await server_writer.drain()
-                    await self.clean_up(None, server_writer)
-                    self.host_list[x].clear()
-            await asyncio.sleep(60)
+        while True:
+            server_writer = None
+            try:
+                for x in self.host_list:
+                    if len(self.host_list[x]) > 0:
+                        server_reader, server_writer = await self.open_connection(host='127.0.0.1',port=self.config['port'] + 1)
+                        server_writer.write(str(list(self.host_list[x])).encode('utf-8') + b'\r\n' + x + b'\r\nhost\r\n\r\n')
+                        await server_writer.drain()
+                        await self.clean_up(None, server_writer)
+                        self.host_list[x].clear()
+                await asyncio.sleep(60)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer)
 
     async def write_log(self):
-        while 1:
-            if len(self.log) > 0:
-                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host='127.0.0.1',port=self.config['port'] + 1),5)
-                server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
-                await server_writer.drain()
-                await self.clean_up(None, server_writer)
-                self.log.clear()
-            await asyncio.sleep(60)
+        while True:
+            server_writer = None
+            try:
+                if len(self.log) > 0:
+                    server_reader, server_writer = await self.open_connection(host='127.0.0.1', port=self.config['port'] + 1)
+                    server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
+                    await server_writer.drain()
+                    await self.clean_up(None, server_writer)
+                    self.log.clear()
+                await asyncio.sleep(60)
+            except Exception as error:
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+                await self.clean_up(server_writer)
 
     @staticmethod
     def conclude(data):
@@ -625,117 +965,296 @@ class yashmak_worker(ymc_dns_parser):
         context.check_hostname = True
         context.load_default_certs()
         return context
-    
-    async def ipv4_test(self):
-        tasks = [('8.8.8.8',53), ('1.1.1.1',53),('ipv4.test-ipv6-vm3.comcast.net',443), ('ipv4.lookup.test-ipv6.com',443),
-                 ('ipv4.test-ipv6.epic.network',443)]
-        fail = 0
-        for task in tasks:
-            server_writer = None
+
+
+class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
+    def __init__(self, config):
+        try:
+            #print(os.getpid(),'dns')
+            self.init(config)
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+
+    def init(self, config):
+        self.config = config
+        self.normal_context = self.init_normal_context()
+        self.dns_records, self.dns_futures_map = dict(), dict()
+        self.ipv4, self.ipv6 = None, None
+        self.set_priority('above_normal')
+        self.create_loop()
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
+        self.loop.set_exception_handler(self.exception_handler)
+        self.loop.create_task(self.create_server())
+        self.loop.create_task(self.internet_refresh_cache())
+        self.loop.create_task(self.dns_clear_cache())
+        self.loop.run_forever()
+
+    def create_server(self):
+        if socket.has_dualstack_ipv6():
+            listener = socket.create_server(address=('::1', self.config['dns_port']), family=socket.AF_INET6,
+                                            dualstack_ipv6=True)
+        else:
+            listener = socket.create_server(address=('127.0.0.1', self.config['dns_port']), family=socket.AF_INET,
+                                            dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+
+    async def handler(self, client_reader, client_writer):
+        try:
+            host = await asyncio.wait_for(client_reader.read(65535), 20)
+            if host == b'8f1f5d11-98bc-42de-a996-e86c8c0cdf7f':
+                dns_response_send_buffer = asyncio.Queue()
+                await asyncio.gather(self.dns_query_receiver(client_reader, dns_response_send_buffer),
+                                     self.dns_response_sender(client_writer, dns_response_send_buffer))
+            elif host == b'ecd465e2-4a3d-48a8-bf09-b744c07bbf83':
+                await self.internet_status(client_writer)
+            else:
+                raise Exception('Invalid Connection')
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        finally:
+            await self.clean_up(client_writer)
+
+    async def dns_query_receiver(self, client_reader, dns_response_send_buffer):
+        buffer = b''
+        while True:
+            buffer += await client_reader.read(65535)
+            position = buffer.rfind(b'\n')
+            hosts = buffer[:position].split(b'\n')
+            buffer = buffer[position + 1:]
+            for host in hosts:
+                self.loop.create_task(self.dns_query_processor(host, dns_response_send_buffer))
+
+    @staticmethod
+    async def dns_response_sender(client_writer, dns_response_send_buffer):
+        while True:
+            buffer = await dns_response_send_buffer.get() + b'\n'
+            if buffer:
+                client_writer.write(buffer)
+                await client_writer.drain()
+
+    async def dns_query_processor(self, host, dns_response_send_buffer):
+        IPs, TTL = await self.auto_resolve(host)
+        try:
+            float(str(TTL).encode('utf-8'))
+            TTL = str(TTL).encode('utf-8')
+        except Exception as error:
+            TTL = b'0'
+        timestamp = str(time.time()).encode('utf-8')
+        if IPs and IPs != [None]:
+            buffer = b''
+            for x in IPs:
+                buffer += x + b','
+            buffer = buffer[:-1]
+            await dns_response_send_buffer.put(host + b'\r' + buffer + b'\r' + TTL + b'\r' + timestamp)
+        elif IPs == [None]:
+            await dns_response_send_buffer.put(host + b'\rNo\r' + TTL + b'\r' + timestamp)
+        else:
+            await dns_response_send_buffer.put(host + b'\rNone\r' + TTL + b'\r' + timestamp)
+
+    async def internet_status(self, client_writer):
+        while True:
+            client_writer.write(str(self.has_internet()).encode('utf-8'))
+            await client_writer.drain()
+            await self.sleep(1)
+
+    async def network_detector(self,hosts,dns_server):
+        for host in hosts:
+            ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', False, dns_server, 0.5),self.dns_query_worker(host, 'AAAA', False, dns_server, 0.5))
+            if ipv4 or ipv6:
+                return True
+        return False
+
+    async def has_ipv4(self):
+        tasks = [b'www.baidu.com', b'www.qq.com', b'www.jd.com']
+        self.ipv4 = await self.network_detector(tasks, {'ipv4': True, 'ipv6': False})
+        return self.ipv4
+
+    async def has_ipv6(self):
+        tasks = [b'www.baidu.com', b'www.qq.com', b'www.jd.com']
+        self.ipv6 = await self.network_detector(tasks, {'ipv4': False, 'ipv6': True})
+        return self.ipv6
+
+    def has_internet(self):
+        if self.ipv4 or self.ipv6:
+            return True
+        if self.ipv4 is False and self.ipv6 is False:
+            return False
+        return None
+
+    async def internet_refresh_cache(self):
+        while True:
+            s = time.time()
             try:
-                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer)
-                break
+                await asyncio.gather(self.has_ipv4(), self.has_ipv6())
             except Exception as error:
-                fail += 1
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer)
-        if fail >= len(tasks):
-            self.ipv6 = False
+            finally:
+                if time.time() - s < 10:
+                    await self.sleep(10)
 
-    async def ipv6_test(self):
-        tasks = [('2001:4860:4860::8888',53), ('2606:4700:4700::1111',53),('ipv6.test-ipv6-vm3.comcast.net',443), ('ipv6.lookup.test-ipv6.com',443),
-                 ('ipv6.test-ipv6.epic.network',443)]
-        fail = 0
-        for task in tasks:
-            server_writer = None
-            try:
-                server_reader, server_writer = await asyncio.wait_for(asyncio.open_connection(host=task[0], port=task[1]), 1)
-                await self.clean_up(server_writer)
-                break
-            except Exception as error:
-                fail += 1
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
-                await self.clean_up(server_writer)
-        if fail >= len(tasks):
-            self.ipv6 = False
+    @staticmethod
+    def is_ipv6(ip):
+        try:
+            if b':' in ip and b'::ffff:' not in ip:
+                return True
+        except ValueError as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        return False
 
-    async def resolve(self,q_type,host,doh=True):
+    async def auto_resolve(self,host):
+        if self.ipv4 and self.ipv6:
+            return await self.resolve('ALL', host)
+        elif self.ipv4:
+            return await self.resolve('A', host)
+        elif self.ipv6:
+            return await self.resolve('AAAA', host)
+        else:
+            return [], None
+
+    async def resolve(self,q_type,host,doh=False):
         if self.is_ip(host):
             host = host.replace(b'::ffff:',b'')
-            return [host]
-        elif host in self.dns_pool and (time.time() - self.dns_ttl[host]) < 600:
-            return self.dns_pool[host][q_type]
-        return (await self.query(host,doh))[q_type]
+            return [host], 2147483647
+        elif host not in self.dns_records:
+            await self.dns_query(host, doh)
+        elif time.time() >= self.dns_records[host][1]:
+            await self.dns_query(host, doh)
+        if host in self.dns_records:
+            TTL = self.dns_records[host][2]
+            if q_type != 'ALL':
+                IPs = self.dns_records[host][0][q_type]
+            else:
+                IPs = self.dns_records[host][0]['A'] + self.dns_records[host][0]['AAAA']
+            return IPs, TTL
+        else:
+            return [], None
 
-    async def query(self,host,doh):
-        for x in [0.5,1,1,2,4]:
-            ipv4, ipv6 = await asyncio.gather(self.query_worker(host, 'A', doh), self.query_worker(host, 'AAAA', doh))
+    async def dns_query(self,host,doh):
+        future = self.loop.create_future()
+        if host in self.dns_futures_map:
+            self.dns_futures_map[host].add(future)
+        else:
+            self.dns_futures_map[host] = {future}
+        if len(self.dns_futures_map[host]) == 1:
+            self.loop.create_task(self.dns_query_manager(host, doh))
+        await future
+
+    async def dns_query_manager(self,host,doh):
+        ipv4, ipv6 = None, None
+        for x in range(10):
+            ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', doh, timeout=0.2), self.dns_query_worker(host, 'AAAA', doh, timeout=0.2))
             if ipv4 or ipv6:
                 break
-            await asyncio.sleep(x)
+        if not ipv4 and not ipv6:
+            ipv4, ipv6 = await asyncio.gather(self.dns_query_worker(host, 'A', not doh), self.dns_query_worker(host, 'AAAA', not doh))
+            if ipv4 or ipv6:
+                doh = not doh
         if not ipv4:
-            ipv4 = []
+            ipv4 = ([], 2147483647)
         if not ipv6:
-            ipv6 = []
-        result = {'A':ipv4,'AAAA':ipv6,'ALL':ipv4+ipv6}
-        if ipv4 or ipv6:
-            self.dns_pool[host] = result
-            self.dns_ttl[host] = time.time()
-        return result
+            ipv6 = ([], 2147483647)
+        if ipv4[0] or ipv6[0]:
+            self.dns_records[host] = ({'A': ipv4[0], 'AAAA': ipv6[0], 'doh': doh}, time.time() + min(ipv4[1], ipv6[1]), min(ipv4[1], ipv6[1]))
+        if host in self.dns_futures_map:
+            while self.dns_futures_map[host]:
+                future = self.dns_futures_map[host].pop()
+                future.set_result(True)
 
-    async def query_worker(self, host, q_type, doh):
+    async def dns_query_worker(self, host, q_type, doh, dns_server=None, timeout=5):
         try:
-            if q_type == 'A':
-                mq_type = 1
-            elif q_type == 'AAAA':
-                mq_type = 28
-            else:
-                raise Exception
-            done, pending, = await asyncio.wait(await self.make_tasks(host, mq_type, doh),return_when=asyncio.FIRST_COMPLETED)
+            if dns_server is None:
+                dns_server = {'ipv4': True, 'ipv6': True}
+            mq_type = self.dns_get_mq_type(q_type)
+            tasks = await self.dns_make_tasks(host, mq_type, doh, dns_server, timeout)
+            if not tasks:
+                return None
+            done, pending, = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for x in pending:
                 x.cancel()
-            results = []
+            responses_raw = []
             for x in range(len(done)):
-                result = done.pop().result()
-                if result:
-                    results.append(result)
-            if not results:
+                response_raw = done.pop().result()
+                if response_raw:
+                    responses_raw.append(response_raw)
+            if not responses_raw:
                 return None
-            for x in results:
-                result = self.dns_decoder(x[0],mq_type,x[1])
-                if result['error'] == None and result['answers']:
-                    IPs = []
-                    for y in result['answers']:
-                        IPs.append(y['rdata'])
-                    return IPs
+            IPs, TTL = self.dns_process_raw_responses(responses_raw, mq_type)
+            if IPs and TTL:
+                return IPs, TTL
             return None
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def make_tasks(self, host, mq_type, doh):
+    def dns_process_raw_responses(self, responses_raw, mq_type):
+        for x in responses_raw:
+            result = self.dns_decoder(x[0], mq_type, x[1])
+            if result['error'] == None and result['answers']:
+                IPs, TTLs = [], []
+                for y in result['answers']:
+                    IPs.append(y['rdata'])
+                    TTLs.append(y['q_ttl'])
+                return IPs, TTLs[0]
+            elif result['error'] == 3 or result['error'] == 2:
+                return [None], 3600
+        return None, None
+
+    @staticmethod
+    def dns_get_mq_type(q_type):
+        if q_type == 'A':
+            return 1
+        elif q_type == 'AAAA':
+            return 28
+        elif q_type == 'CNAME':
+            return 5
+        else:
+            raise Exception
+
+    async def dns_make_tasks(self, host, mq_type, doh, dns_server, timeout):
         try:
-            query, ID = self.dns_encoder(host,mq_type)
             tasks = []
-            for x in self.config['normal_dns']:
-                tasks.append(asyncio.create_task(self.get_normal_query_response(query, ID, (x, 53))))
             if doh:
-                for x in self.config['doh_dns']:
-                    v4 = await self.resolve('A', x, False)
-                    v6 = await self.resolve('AAAA', x, False)
-                    if v4 != []:
-                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, ID, (v4[0], 443), x)))
-                    if v6 != []:
-                        tasks.append(asyncio.create_task(self.get_doh_query_response(query, ID, (v6[0], 443), x)))
+                tasks += await self.dns_make_doh_tasks(host, mq_type, dns_server)
+            else:
+                tasks += self.dns_make_normal_tasks(host, mq_type, dns_server, timeout)
             return tasks
         except Exception as error:
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    async def get_normal_query_response(self, query, ID, address):
+    async def dns_make_doh_tasks(self, host, mq_type, dns_server):
+        tasks = []
+        for x in self.config['doh_dns']:
+            if self.ipv4 and dns_server['ipv4']:
+                v4 = await self.resolve('A', x, False)
+                if v4:
+                    query, ID = self.dns_encoder(host,mq_type)
+                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v4[0], 443), x)))
+            if self.ipv6 and dns_server['ipv6']:
+                v6 = await self.resolve('AAAA', x, False)
+                if v6:
+                    query, ID = self.dns_encoder(host, mq_type)
+                    tasks.append(asyncio.create_task(self.dns_make_doh_query(query, ID, (v6[0], 443), x)))
+        return tasks
+
+    def dns_make_normal_tasks(self, host, mq_type, dns_server, timeout):
+        tasks = []
+        for x in self.config['normal_dns']:
+            if ((not self.ipv4 and (self.ipv4 or self.ipv6)) or not dns_server['ipv4']) and not self.is_ipv6(x):
+                continue
+            if ((not self.ipv6 and (self.ipv4 or self.ipv6)) or not dns_server['ipv6']) and self.is_ipv6(x):
+                continue
+            query, ID = self.dns_encoder(host, mq_type)
+            tasks.append(asyncio.create_task(self.dns_make_normal_query(query, ID, (x, 53), timeout)))
+        return tasks
+
+    async def dns_make_normal_query(self, query, ID, address, timeout):
         s = None
         try:
             if self.is_ipv6(address[0]):
@@ -745,64 +1264,61 @@ class yashmak_worker(ymc_dns_parser):
             s.setblocking(False)
             await self.loop.sock_connect(s, (address[0].decode('utf-8'),address[1]))
             await self.loop.sock_sendall(s, query)
-            result = await asyncio.wait_for(self.loop.sock_recv(s, 512),4)
+            try:
+                result = await asyncio.wait_for(self.loop.sock_recv(s, 512), timeout)
+            except asyncio.exceptions.TimeoutError:
+                raise Exception('timeout')
             return result, ID
         except Exception as error:
-            await asyncio.sleep(5)
+            if str(error) != 'timeout':
+                await self.sleep((lambda x: 1 if x < 1 else x)(timeout))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(s)
         finally:
             await self.clean_up(s)
 
-    async def get_doh_query_response(self, query, ID, address, hostname):
+    async def dns_make_doh_query(self, query, ID, address, hostname):
         server_writer = None
         try:
-            server_reader, server_writer = await asyncio.open_connection(host=address[0],
-                                                                         port=address[1],
-                                                                         ssl=self.normal_context,
-                                                                         server_hostname=hostname,
-                                                                         ssl_handshake_timeout=5)
-            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') + b' HTTP/1.1\r\nHost: ' + hostname + b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
+            server_reader, server_writer = await self.open_connection(address[0], address[1], True, hostname, 2)
+            server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
             await server_writer.drain()
-            result = await asyncio.wait_for(server_reader.read(4096),4)
+            result = await asyncio.wait_for(server_reader.read(16384),2)
             result = result[result.find(b'\r\n\r\n')+4:]
             return result, ID
         except Exception as error:
-            await asyncio.sleep(5)
+            await self.sleep(4)
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
-            await self.clean_up(server_writer)
         finally:
             await self.clean_up(server_writer)
 
-    async def clear_cache(self):
-        while 1:
+    async def dns_clear_cache(self):
+        while True:
             try:
-                for x in list(self.dns_pool.keys()):
-                    if (time.time() - self.dns_ttl[x]) > 600:
-                        del self.dns_pool[x]
-                        del self.dns_ttl[x]
-                for x in range(600):
-                    S = time.time()
-                    await asyncio.sleep(0.5)
-                    E = time.time()
-                    if E - S > 1.5:
-                        break
+                for x in list(self.dns_records.keys()):
+                    if time.time() > self.dns_records[x][1]:
+                        del self.dns_records[x]
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+            finally:
+                await self.sleep(10)
+
+    def exception_handler(self, loop, context):
+        pass
 
 
 class yashmak_log():
-    def __init__(self,start_time,local_path, port):
+    def __init__(self, config):
         self.loop = asyncio.new_event_loop()
-        listener = socket.create_server(address=('127.0.0.1', port), family=socket.AF_INET, dualstack_ipv6=False)
+        listener = socket.create_server(address=('127.0.0.1', self.config['port'] + 1), family=socket.AF_INET, dualstack_ipv6=False)
         server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
         self.host_list = dict()
         self.log = []
-        self.local_path = local_path
-        self.start_time = start_time
+        self.config = config
+        self.local_path = self.config['local_path']
+        self.start_time = self.config['start_time']
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(server)
         self.loop.create_task(self.write_host())
@@ -812,7 +1328,7 @@ class yashmak_log():
     async def handler(self, client_reader, client_writer):
         try:
             data = b''
-            while 1:
+            while True:
                 data += await client_reader.read(65536)
                 if data[-4:] == b'\r\n\r\n':
                     data, key, instruction = data[:-4].decode('utf-8').split('\r\n')
@@ -840,7 +1356,7 @@ class yashmak_log():
             await self.clean_up(client_writer, None)
     
     async def write_host(self):
-        while 1:
+        while True:
             for x in self.host_list:
                 if x != 'blacklist' and len(self.host_list[x]) > 0:
                     if os.path.exists(self.local_path + '/Cache/' + x + '.json'):
@@ -856,7 +1372,7 @@ class yashmak_log():
     async def write_log(self):
         if not os.path.exists(self.local_path + '/Logs/'):
             os.makedirs(self.local_path + '/Logs/')
-        while 1:
+        while True:
             with open(self.local_path + '/Logs/' + time.strftime("%Y%m%d%H%M%S", self.start_time) + '.json', 'a+') as file:
                 for x in self.log:
                     file.write(x+'\n\n')
@@ -896,23 +1412,26 @@ class yashmak_log():
 
 class yashmak():
     def __init__(self):
-        self.host_list = dict()
-        self.dns_pool = dict()
-        self.dns_ttl = dict()
-        self.geoip_list = []
         self.load_config()
         self.load_lists()
         self.get_time()
         self.edit_iptables()
+        self.find_ports()
 
     def run_forever(self):
         # start log server
-        p = multiprocessing.Process(target=yashmak_log,args=(self.start_time,self.local_path,self.config['port']+1))
+        p = multiprocessing.Process(target=yashmak_log, args=(self.config))
         p.start()
+
+        # start DNS server
+        p = multiprocessing.Process(target=yashmak_dns, args=(self.config))
+        p.start()
+
         # start normal workers
         for x in range(os.cpu_count()):
-            p = multiprocessing.Process(target=yashmak_worker,args=(self.config,self.host_list,self.dns_pool,self.dns_ttl,self.geoip_list,self.exception_list_name,self.local_path,self.utc_difference,self.start_time))
+            p = multiprocessing.Process(target=yashmak_worker, args=(self.config))
             p.start()
+
         # start spare workers
         self.run_spares()
 
@@ -923,7 +1442,7 @@ class yashmak():
             config['port'] = self.get_calculated_port()
             ps = []
             for x in range(os.cpu_count()):
-                p = multiprocessing.Process(target=yashmak_worker, args=(config, self.host_list, self.dns_pool, self.dns_ttl, self.geoip_list, self.exception_list_name,self.local_path, self.utc_difference, self.start_time))
+                p = multiprocessing.Process(target=yashmak_worker, args=(config))
                 p.start()
                 ps.append(p)
             while config['port'] == self.get_calculated_port():
@@ -941,8 +1460,8 @@ class yashmak():
             except Exception as error:
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-        self.utc_difference = offset
-        self.start_time = time.localtime()
+        self.config['utc_difference'] = offset
+        self.config['start_time'] = time.localtime()
 
     def edit_iptables(self):
         try:
@@ -954,6 +1473,19 @@ class yashmak():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
+    def find_ports(self):
+        ports = set()
+        while len(ports) < 1:
+            R = str(random.randint(2000,8000))
+            if "windows" in platform.system().lower():
+                if os.popen("netstat -aon | findstr 127.0.0.1:" + R).read() == "" and os.popen("netstat -aon | findstr [::1]:" + R).read() == "":
+                    ports.add(int(R))
+            elif "linux" in platform.system().lower():
+                if os.popen("netstat -tulpn | grep ':" + R + "'").read() == "":
+                    ports.add(int(R))
+        ports = list(ports)
+        self.config['dns_port'] = ports.pop(0)
+
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
         if os.path.exists(self.local_path + '/config.json'):
@@ -964,26 +1496,39 @@ class yashmak():
             self.config['uuid'] = self.UUID_detect(set(list(map(self.encode, self.config['uuid']))))
             self.config['port'] = int(self.config['port'])
             self.config['normal_dns'] = list(map(self.encode, self.config['normal_dns']))
-            self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
+            if 'doh_dns' in self.config:
+                self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
+            else:
+                self.config['doh_dns'] = []
+            self.config['local_path'] = self.local_path
         else:
-            example = {'geoip': '','blacklist': '','hostlist': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': [''],
+            example = {'geoip_list_path': '','black_list_path': '','host_list_path': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': [''],
                        'doh_dns': [''], 'ip': '', 'port': ''}
             with open(self.local_path + '/config.json', 'w') as file:
                 json.dump(example, file, indent=4)
 
     def load_lists(self):
-        with open(self.config['geoip'], 'r') as file:
+        self.host_list = dict()
+        self.black_list = dict()
+        self.dns_records = dict()
+        self.geoip_list = []
+
+        with open(self.config['geoip_list_path'], 'r') as file:
             data = json.load(file)
         for x in data:
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
+        for x in ['10.0.0.0/8','100.64.0.0/10','127.0.0.0/8','169.254.0.0/16','172.16.0.0/12','192.168.0.0/16','::1/128','fd00::/8','fe80::/10']:
+            network = ipaddress.ip_network(x)
+            self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
-        self.exception_list_name = self.config['uuid']
+
         if not os.path.exists(self.local_path + '/Cache/'):
             os.makedirs(self.local_path + '/Cache/')
-        for x in self.exception_list_name:
+        for x in self.config['uuid']:
             self.host_list[x] = set()
-        with open(self.config['blacklist'], 'r') as file:
+
+        with open(self.config['black_list_path'], 'r') as file:
             data = json.load(file)
         for key in list(data):
             if key != 'tag':
@@ -995,12 +1540,17 @@ class yashmak():
             del data['tag'][key]
             data['tag'][key.replace('*', '').encode('utf-8')] = value
         data[None] = None
-        self.host_list[b'blacklist'] = data
-        with open(self.config['hostlist'], 'r') as file:
+        self.black_list = data
+
+        with open(self.config['host_list_path'], 'r') as file:
             data = json.load(file)
         for x in data:
-            self.dns_pool[x.encode('utf-8')] = data[x]
-            self.dns_ttl[x.encode('utf-8')] = time.time() * 2
+            self.dns_records[x.encode('utf-8')] = (data[x], float('inf'))
+
+        self.config['host_list'] = self.host_list
+        self.config['black_list'] = self.black_list
+        self.config['geoip_list'] = self.geoip_list
+        self.config['dns_records'] = self.dns_records
 
     @staticmethod
     def UUID_detect(UUIDs):
