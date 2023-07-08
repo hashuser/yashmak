@@ -40,13 +40,13 @@ install_python(){
 
 main(){
 array0=(${python_version//./ })     # Split at periods
-rc0=$(echo ${array0[2]} | grep -o 'rc')  # Extract 'rc' if exists
-rc0_num=$(echo ${array0[2]} | grep -o '[0-9]*$')  # Extract rc number if exists
+rc0=$(echo ${array0[2]} | grep -o 'rc' || true)  # Extract 'rc' if exists
+rc0_num=$(echo ${array0[2]#$rc0} | grep -o '[0-9]*$' || true)  # Extract rc number if exists
 array0[2]=$(echo ${array0[2]} | grep -o '^[0-9]*')  # Strip non-numerical characters at beginning
 
 array1=(${current_python_version//./ })
-rc1=$(echo ${array1[2]} | grep -o 'rc')
-rc1_num=$(echo ${array1[2]} | grep -o '[0-9]*$')
+rc1=$(echo ${array1[2]} | grep -o 'rc' || true)
+rc1_num=$(echo ${array1[2]#$rc1} | grep -o '[0-9]*$' || true)
 array1[2]=$(echo ${array1[2]} | grep -o '^[0-9]*')
 
 # Initial comparison of major, minor, and patch version
@@ -71,3 +71,4 @@ fi
 }
 
 main
+
