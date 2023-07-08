@@ -52,7 +52,7 @@ array1[2]=$(echo ${array1[2]} | grep -o '^[0-9]*')
 # Initial comparison of major, minor, and patch version
 if [[ ${array0[0]} -gt ${array1[0]} ]] || \
    ([[ ${array0[0]} -eq ${array1[0]} ]] && ([[ ${array0[1]} -gt ${array1[1]} ]] || \
-   ([[ ${array0[1]} -eq ${array1[1]} ]] && ${array0[2]} -gt ${array1[2]})))
+   ([[ ${array0[1]} -eq ${array1[1]} ]] && [[ ${array0[2]} -gt ${array1[2]} ]]))
 then
     echo "update required"
     install_python
