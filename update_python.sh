@@ -1,7 +1,7 @@
 #!/bin/bash
 path=$(cd "$(dirname "$0")";pwd)
-python_version="3.10.12"
-python_main_version="3.10"
+python_version="3.11.4"
+python_main_version="3.11"
 current_python_version=$(python$python_main_version -V)
 current_python_version=${current_python_version: 7}
 cpu_count=$(( $(cat /proc/cpuinfo |grep "processor"|wc -l) - 1 ))
