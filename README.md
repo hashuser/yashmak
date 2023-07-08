@@ -23,7 +23,7 @@ sudo Yashmak_config
 {
     "geoip_list_path": "/root/Yashmak/geoip.json",  # IP addresses of (eg. China)
     "black_list_path": "/root/Yashmak/blacklist.json",  # Blacklist of domain
-    "host_list_path": "/root/Yashmak/hostlist.json",  # Maps hostnames to IP addresses
+    "host_list_path": "/root/Yashmak/hostlist.json",  # Maps hostnames to IPs / Forward to Proxy
     "cert": "/root/Yashmak/Certs/server.crt",  # ECC Public Key
     "key": "/root/Yashmak/Certs/server.key",  # ECC Private Key
     "uuid": [
@@ -35,10 +35,18 @@ sudo Yashmak_config
         "2001:4860:4860::8888",
         "2606:4700:4700::1111"
     ],
-    "doh_dns": [
+    "doh_dns": [  # Optional
         "1.1.1.1",
         "dns.google"
     ],
+    "proxy": {  # Optional
+        "Node_NY": {
+            "cert": "/root/Yashmak/Certs/server2.crt",  # CA
+            "host": "example.com",
+            "port": "443",
+            "uuid": "380ff5b5-31f8-4d22-ba25-c274156f04d9"
+        }
+    },
     "ip": "::",  # Listening IP address
     "port": "443"  # Listening Port
 }
