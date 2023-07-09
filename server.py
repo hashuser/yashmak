@@ -1284,19 +1284,24 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
 
 class yashmak_log():
     def __init__(self, config):
-        self.loop = asyncio.new_event_loop()
-        listener = socket.create_server(address=('127.0.0.1', self.config['port'] + 1), family=socket.AF_INET, dualstack_ipv6=False)
-        server = asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
+        self.config = config
         self.host_list = dict()
         self.log = []
-        self.config = config
         self.local_path = self.config['local_path']
         self.start_time = self.config['start_time']
+        self.create_loop()
+
+    def create_loop(self):
+        self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
-        self.loop.create_task(server)
+        self.loop.create_task(self.create_server())
         self.loop.create_task(self.write_host())
         self.loop.create_task(self.write_log())
         self.loop.run_forever()
+
+    def create_server(self):
+        listener = socket.create_server(address=('127.0.0.1', self.config['port'] + 1), family=socket.AF_INET, dualstack_ipv6=False)
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
     
     async def handler(self, client_reader, client_writer):
         try:
@@ -1393,16 +1398,16 @@ class yashmak():
 
     def run_forever(self):
         # start log server
-        p = multiprocessing.Process(target=yashmak_log, args=(self.config))
+        p = multiprocessing.Process(target=yashmak_log, args=(self.config,))
         p.start()
 
         # start DNS server
-        p = multiprocessing.Process(target=yashmak_dns, args=(self.config))
+        p = multiprocessing.Process(target=yashmak_dns, args=(self.config,))
         p.start()
 
         # start normal workers
         for x in range(os.cpu_count()):
-            p = multiprocessing.Process(target=yashmak_worker, args=(self.config))
+            p = multiprocessing.Process(target=yashmak_worker, args=(self.config,))
             p.start()
 
         # start spare workers
@@ -1415,7 +1420,7 @@ class yashmak():
             config['port'] = self.get_calculated_port()
             ps = []
             for x in range(os.cpu_count()):
-                p = multiprocessing.Process(target=yashmak_worker, args=(config))
+                p = multiprocessing.Process(target=yashmak_worker, args=(config, ))
                 p.start()
                 ps.append(p)
             while config['port'] == self.get_calculated_port():
