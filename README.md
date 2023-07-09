@@ -61,7 +61,7 @@ sudo systemctl restart Yashmak
 ```
 
 ## 如无法获取最新版本GCC/G++，将先编译GCC/G++，更新会耗费较长时间
-
+(4C8T AMD EPYC-Rome，编译安装GCC/G++以及Python，总耗时约 30 mins）
 >### OpenSSL更新(Ubuntu 18.04TLS+)
 ```
 sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_openssl.sh | bash
