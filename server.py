@@ -199,6 +199,8 @@ class ymc_connect(ymc_ssl_context):
                         context = self.init_normal_context()
                     if server_hostname == None:
                         server_hostname = host
+                    if isinstance(server_hostname, bytes):
+                        server_hostname = server_hostname.decode('utf-8')
                     return await asyncio.wait_for(asyncio.open_connection(host=host, port=port, ssl=context,
                                                                           server_hostname=server_hostname,
                                                                           ssl_handshake_timeout=ssl_handshake_timeout),timeout)
@@ -1508,6 +1510,11 @@ class yashmak():
                 self.config['doh_dns'] = list(map(self.encode, self.config['doh_dns']))
             else:
                 self.config['doh_dns'] = []
+            if 'proxy' in self.config:
+                for x in self.config['proxy']:
+                    self.config['proxy'][x]['uuid'] = self.config['proxy'][x]['uuid'].encode('utf-8')
+                    self.config['proxy'][x]['port'] = int(self.config['proxy'][x]['port'])
+                    self.config['proxy'][x]['host'] = self.config['proxy'][x]['host'].encode('utf-8')
             self.config['local_path'] = self.local_path
         else:
             example = {'geoip_list_path': '','black_list_path': '','host_list_path': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': [''],
