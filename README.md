@@ -23,7 +23,8 @@ sudo Yashmak_config
 {
     "geoip_list_path": "/root/Yashmak/geoip.json",  # IP addresses of (eg. China)
     "black_list_path": "/root/Yashmak/blacklist.json",  # Blacklist of domain
-    "host_list_path": "/root/Yashmak/hostlist.json",  # Maps hostnames to IPs / Forward to Proxy
+    "host_list_path": "/root/Yashmak/hostlist.json",  # Maps hostnames to IPs
+    "proxy_list_path": "/root/Yashmak/proxylist.json", # Optional, Forward traffic to certain domains to Proxy
     "cert": "/root/Yashmak/Certs/server.crt",  # ECC Public Key
     "key": "/root/Yashmak/Certs/server.key",  # ECC Private Key
     "uuid": [
