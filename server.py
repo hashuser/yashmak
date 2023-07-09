@@ -170,14 +170,23 @@ class ymc_ssl_context:
         context.load_default_certs()
         return context
 
-    def init_proxy_context(self):
+    def init_client_context(self, ca_path=None):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
+        if ca_path is None:
+            ca_path = self.config_path + self.config['cert']
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.set_alpn_protocols(['h2', 'http/1.1'])
         context.verify_mode = ssl.CERT_REQUIRED
         context.check_hostname = True
-        context.load_verify_locations(self.config_path + self.config['cert'])
+        context.load_verify_locations(ca_path)
+        return context
+
+    def init_server_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['http/1.1'])
+        context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
 
 
@@ -519,16 +528,20 @@ class ymc_connect_remote_server(ymc_dns_cache, ymc_internet_status_cache):
         super().__init__()
         self.main_port_fail = 0
 
-    async def connect_proxy_server(self):
+    async def connect_proxy_server(self, d_host=None, d_port=None, d_context=None):
         server_reader, server_writer = None, None
+        if d_host is None or d_port is None or d_context is None:
+            d_host = self.config['host']
+            d_port = self.config['port']
+            d_context = self.client_context
         if self.main_port_fail <= 100:
-            ports = [self.config['port'], self.get_calculated_port()]
+            ports = [d_port, self.get_calculated_port()]
         else:
             ports = [self.get_calculated_port()]
         for port in ports:
-            for IP in await self.resolve(self.config['host']):
+            for IP in await self.resolve(d_host):
                 try:
-                    server_reader, server_writer = await self.open_connection(IP, port, True, self.config['host'],context=self.proxy_context)
+                    server_reader, server_writer = await self.open_connection(IP, port, True, d_host, context=d_context)
                     if len(ports) == 2:
                         self.main_port_fail = 0
                     return server_reader, server_writer
@@ -553,9 +566,9 @@ class yashmak_worker(ymc_connect_remote_server):
     def __init__(self,config):
         super().__init__()
         self.config = config
-        self.normal_context = self.get_normal_context()
         self.host_list = self.config['host_list']
         self.black_list = self.config['black_list']
+        self.proxy_list = self.config['proxy_list']
         self.geoip_list = self.config['geoip_list']
         self.dns_records = self.config['dns_records']
         self.local_path = self.config['local_path']
@@ -572,7 +585,7 @@ class yashmak_worker(ymc_connect_remote_server):
         else:
             listener = socket.create_server(address=(self.config['ip'], self.config['port']), family=socket.AF_INET,
                                             reuse_port=True,dualstack_ipv6=False)
-        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.get_proxy_context())
+        return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048,ssl=self.init_server_context())
 
     def create_loop(self):
         self.loop = asyncio.new_event_loop()
@@ -629,20 +642,53 @@ class yashmak_worker(ymc_connect_remote_server):
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
 
-    async def make_proxy(self,host,port,uuid):
+    async def make_proxy(self, host, port, uuid):
         server_reader, server_writer = None, None
-        IPs = await self.get_IPs(host)
-        for x in range(len(IPs)):
-            address = IPs[int(random.random() * 1000 % len(IPs))]
-            self.is_china_ip(address, host, uuid)
-            try:
-                server_reader, server_writer = await self.open_connection(address, port)
-                break
-            except Exception as error:
-                traceback.clear_frames(error.__traceback__)
-                error.__traceback__ = None
+        destination = self.is_nested_proxy(host)
+        if destination:
+            server_reader, server_writer = await self.do_handshake(host, port, destination)
+        else:
+            IPs = await self.get_IPs(host)
+            for x in range(len(IPs)):
+                address = IPs[int(random.random() * 1000 % len(IPs))]
+                self.is_china_ip(address, host, uuid)
+                try:
+                    server_reader, server_writer = await self.open_connection(address, port)
+                    break
+                except Exception as error:
+                    traceback.clear_frames(error.__traceback__)
+                    error.__traceback__ = None
         if server_reader == None or server_writer == None:
             raise Exception
+        return server_reader, server_writer
+
+    def is_nested_proxy(self, host):
+        for x in self.proxy_list:
+            if self.host_in_it(host, self.proxy_list[x]):
+                return x
+        return None
+
+    @staticmethod
+    def host_in_it(host, var):
+        if host in var:
+            return True
+        segment_length = len(host)
+        while True:
+            segment_length = host.rfind(b'.', 0, segment_length) - 1
+            if segment_length <= -1:
+                break
+            if host[segment_length + 1:] in var:
+                return True
+        return False
+
+    async def do_handshake(self, host, port, destination=None):
+        d_host = self.config['proxy'][destination]['host']
+        d_port = self.config['proxy'][destination]['port']
+        d_context = self.init_client_context(self.config['proxy'][destination]['cert'])
+        server_reader, server_writer = await self.connect_proxy_server(d_host, d_port, d_context)
+        server_writer.write(self.config['proxy'][destination]['uuid'])
+        server_writer.write(int.to_bytes(len(host + b'\n' + port + b'\n'), 2, 'big', signed=True) + host + b'\n' + port + b'\n')
+        await server_writer.drain()
         return server_reader, server_writer
 
     async def make_switches(self,cr,cw,sr,sw):
@@ -922,23 +968,6 @@ class yashmak_worker(ymc_connect_remote_server):
         else:
             return data
 
-    def get_proxy_context(self):
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.minimum_version = ssl.TLSVersion.TLSv1_3
-        context.set_alpn_protocols(['http/1.1'])
-        context.load_cert_chain(self.config['cert'], self.config['key'])
-        return context
-
-    @staticmethod
-    def get_normal_context():
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.minimum_version = ssl.TLSVersion.TLSv1_2
-        context.set_alpn_protocols(['http/1.1'])
-        context.verify_mode = ssl.CERT_REQUIRED
-        context.check_hostname = True
-        context.load_default_certs()
-        return context
-
 
 class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
     def __init__(self, config):
@@ -951,7 +980,6 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
 
     def init(self, config):
         self.config = config
-        self.normal_context = self.init_normal_context()
         self.dns_records, self.dns_futures_map = dict(), dict()
         self.ipv4, self.ipv6 = None, None
         self.set_priority('above_normal')
@@ -1490,6 +1518,7 @@ class yashmak():
     def load_lists(self):
         self.host_list = dict()
         self.black_list = dict()
+        self.proxy_list = dict()
         self.dns_records = dict()
         self.geoip_list = []
 
@@ -1527,8 +1556,17 @@ class yashmak():
         for x in data:
             self.dns_records[x.encode('utf-8')] = (data[x], float('inf'))
 
+        if 'proxy_list_path' in self.config:
+            with open(self.config['proxy_list_path'], 'r') as file:
+                data = json.load(file)
+            for key in data:
+                self.proxy_list[key] = set()
+                for host in data[key]:
+                    self.proxy_list[key].add(host.replace('*', '').encode('utf-8'))
+
         self.config['host_list'] = self.host_list
         self.config['black_list'] = self.black_list
+        self.config['proxy_list'] = self.proxy_list
         self.config['geoip_list'] = self.geoip_list
         self.config['dns_records'] = self.dns_records
 
