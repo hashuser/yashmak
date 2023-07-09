@@ -8,7 +8,6 @@ then
 fi
 
 main(){
-  sudo curl -L https://raw.githubusercontent.com/hashuser/yashmak/master/update_gcc.sh | bash
   update-ca-certificates -f
   wget https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_$openssl_version.tar.gz
   tar xzvf OpenSSL_$openssl_version.tar.gz
