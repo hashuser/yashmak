@@ -128,7 +128,7 @@ install_Yashmak(){
   dpkg-reconfigure libc6
   DEBIAN_FRONTEND=noninteractive dpkg --configure libssl1.1 
   DEBIAN_FRONTEND=noninteractive apt-get install -y libssl1.1
-  apt-get instal net-tools -y
+  apt-get install net-tools -y
   apt-get install python$python_main_version -y
   apt-get install python3-pip -y
   apt-get install python3-distutils -y
