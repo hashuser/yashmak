@@ -32,9 +32,9 @@ install_python(){
   python$python_main_version -m pip install ntplib
   python$python_main_version -m pip install psutil
   python$python_main_version -V
-  systemctl restart Yashmak
   rm -rf $path/Python-$python_version
   rm -f $path/Python-$python_version.tgz
+  systemctl restart Yashmak
 }
 
 main(){
