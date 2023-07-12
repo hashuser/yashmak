@@ -577,6 +577,7 @@ class yashmak_worker(ymc_connect_remote_server):
         self.utc_difference = self.config['utc_difference']
         self.start_time = self.config['start_time']
         self.log = []
+        self.log_sender_buffer = asyncio.Queue()
         self.set_priority('above_normal')
         self.create_loop()
 
@@ -593,9 +594,8 @@ class yashmak_worker(ymc_connect_remote_server):
         self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
         self.loop.create_task(self.create_server())
-        self.loop.create_task(self.write_host())
-        self.loop.create_task(self.write_log())
         self.loop.create_task(self.connect_dns_local())
+        self.loop.create_task(self.connect_log_local())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
@@ -626,6 +626,7 @@ class yashmak_worker(ymc_connect_remote_server):
                 else:
                     raise Exception('unknown command')
         except Exception as error:
+            self.log.append("Worker_main_handler: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
@@ -640,6 +641,7 @@ class yashmak_worker(ymc_connect_remote_server):
             for x in pending:
                 x.cancel()
         except Exception as error:
+            self.log.append("Worker_proxy: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(client_writer, server_writer)
@@ -658,6 +660,7 @@ class yashmak_worker(ymc_connect_remote_server):
                     server_reader, server_writer = await self.open_connection(address, port)
                     break
                 except Exception as error:
+                    self.log.append("Worker_make_proxy: " + str(error))
                     traceback.clear_frames(error.__traceback__)
                     error.__traceback__ = None
         if server_reader == None or server_writer == None:
@@ -675,7 +678,7 @@ class yashmak_worker(ymc_connect_remote_server):
         if host in var:
             return True
         segment_length = len(host)
-        while True:
+        for x in range(64):
             segment_length = host.rfind(b'.', 0, segment_length) - 1
             if segment_length <= -1:
                 break
@@ -779,6 +782,7 @@ class yashmak_worker(ymc_connect_remote_server):
                 writer.write(b'''<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n''')
             await writer.drain()
         except Exception as error:
+            self.log.append("Worker_camouflage: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(None, writer)
@@ -792,6 +796,7 @@ class yashmak_worker(ymc_connect_remote_server):
                 writer.write(data)
                 await writer.drain()
         except BaseException as error:
+            self.log.append("Worker_switch: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(writer)
@@ -814,6 +819,7 @@ class yashmak_worker(ymc_connect_remote_server):
             writer.write(b'ok')
             await writer.drain()
         except Exception as error:
+            self.log.append("Worker_echo: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(writer)
@@ -831,6 +837,7 @@ class yashmak_worker(ymc_connect_remote_server):
                 await writer.drain()
                 await self.clean_up(writer)
         except Exception as error:
+            self.log.append("Worker_redirect: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(writer)
@@ -847,6 +854,7 @@ class yashmak_worker(ymc_connect_remote_server):
                 await writer.drain()
             await self.clean_up(writer)
         except Exception as error:
+            self.log.append("Worker_updater: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
             await self.clean_up(writer)
@@ -863,6 +871,7 @@ class yashmak_worker(ymc_connect_remote_server):
                             self.exception_list_cache[uuid + b'_compressed'] = gzip.compress(content, 2)
                 await asyncio.sleep(60)
         except Exception as error:
+            self.log.append("Worker_updater_cache: " + str(error))
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
@@ -928,35 +937,50 @@ class yashmak_worker(ymc_connect_remote_server):
 
     async def write_host(self):
         while True:
-            server_writer = None
             try:
                 for x in self.host_list:
                     if len(self.host_list[x]) > 0:
-                        server_reader, server_writer = await self.open_connection(host='127.0.0.1',port=self.config['port'] + 1)
-                        server_writer.write(str(list(self.host_list[x])).encode('utf-8') + b'\r\n' + x + b'\r\nhost\r\n\r\n')
-                        await server_writer.drain()
-                        await self.clean_up(None, server_writer)
+                        await self.log_sender_buffer.put(str(list(self.host_list[x])).encode('utf-8') + b'\r\n' + x + b'\r\nhost\r\n\r\n')
                         self.host_list[x].clear()
-                await asyncio.sleep(60)
+                await asyncio.sleep(15)
             except Exception as error:
+                self.log.append("Worker_write_host: " + str(error))
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
-                await self.clean_up(server_writer)
 
     async def write_log(self):
         while True:
-            server_writer = None
             try:
                 if len(self.log) > 0:
-                    server_reader, server_writer = await self.open_connection(host='127.0.0.1', port=self.config['port'] + 1)
-                    server_writer.write(str(self.log).encode('utf-8') + b'\r\n\r\nlog\r\n\r\n')
-                    await server_writer.drain()
-                    await self.clean_up(None, server_writer)
+                    await self.log_sender_buffer.put(str(self.log).encode('utf-8') + b'\r\nnone\r\nlog\r\n\r\n')
                     self.log.clear()
-                await asyncio.sleep(60)
+                await asyncio.sleep(15)
             except Exception as error:
+                self.log.append("Worker_write_log: " + str(error))
                 traceback.clear_frames(error.__traceback__)
                 error.__traceback__ = None
+
+    async def log_sender(self, server_writer):
+        while True:
+            data = await self.log_sender_buffer.get()
+            server_writer.write(data)
+            await server_writer.drain()
+
+    async def connect_log_local(self):
+        self.loop.create_task(self.write_host())
+        self.loop.create_task(self.write_log())
+        while True:
+            server_writer = None
+            try:
+                server_reader, server_writer = await self.open_connection(host='127.0.0.1', port=self.config['log_port'])
+                server_writer.write(b'f31d7515-d90f-4eba-a4a9-8eac1d0a423e')
+                await server_writer.drain()
+                await self.log_sender(server_writer)
+            except Exception as error:
+                self.log.append("Worker_connect_log_local: " + str(error))
+                traceback.clear_frames(error.__traceback__)
+                error.__traceback__ = None
+            finally:
                 await self.clean_up(server_writer)
 
     @staticmethod
@@ -1330,18 +1354,32 @@ class yashmak_log():
         self.loop.run_forever()
 
     def create_server(self):
-        listener = socket.create_server(address=('127.0.0.1', self.config['port'] + 1), family=socket.AF_INET, dualstack_ipv6=False)
+        listener = socket.create_server(address=('127.0.0.1', self.config['log_port']), family=socket.AF_INET, dualstack_ipv6=False)
         return asyncio.start_server(client_connected_cb=self.handler, sock=listener, backlog=2048)
     
     async def handler(self, client_reader, client_writer):
         try:
-            data = b''
-            while True:
-                data += await client_reader.read(65536)
-                if data[-4:] == b'\r\n\r\n':
-                    data, key, instruction = data[:-4].decode('utf-8').split('\r\n')
-                    break
-            if instruction == 'host':
+            host = await asyncio.wait_for(client_reader.read(65535), 20)
+            if host == b'f31d7515-d90f-4eba-a4a9-8eac1d0a423e':
+                await self.log_receiver(client_reader)
+            else:
+                raise Exception('Invalid Connection')
+        except Exception as error:
+            traceback.clear_frames(error.__traceback__)
+            error.__traceback__ = None
+        finally:
+            await self.clean_up(client_writer)
+
+    async def log_receiver(self, client_reader):
+        buffer = b''
+        while True:
+            buffer += await client_reader.read(65535)
+            position = buffer.find(b'\r\n\r\n')
+            data, key, instruction = buffer[:position].split(b'\r\n')
+            buffer = buffer[position + 4:]
+            if instruction == b'host':
+                data = data.decode('utf-8')
+                key = key.decode('utf-8')
                 data = data[1:-1]
                 data = data.replace("b'", '')
                 data = data.replace("'", '')
@@ -1350,18 +1388,15 @@ class yashmak_log():
                     self.host_list[key] = set()
                 for x in data:
                     self.host_list[key].add(x)
-            elif instruction == 'log':
+            elif instruction == b'log':
+                data = data.decode('utf-8')
                 data = data[1:-1]
+                data = data.decode('utf-8')
                 data = data.replace('"', '')
                 data = data.replace('),', ')),')
                 data = data.split('), ')
                 for x in data:
                     self.log.append(x)
-            await self.clean_up(client_writer, None)
-        except Exception as error:
-            traceback.clear_frames(error.__traceback__)
-            error.__traceback__ = None
-            await self.clean_up(client_writer, None)
     
     async def write_host(self):
         while True:
@@ -1424,7 +1459,6 @@ class yashmak():
         self.load_lists()
         self.get_time()
         self.edit_iptables()
-        self.find_ports()
 
     def run_forever(self):
         # start log server
@@ -1455,8 +1489,11 @@ class yashmak():
                 ps.append(p)
             while config['port'] == self.get_calculated_port():
                 time.sleep(1)
-            for x in ps:
-                x.kill()
+            if os.popen('''systemctl list-unit-files | grep "Yashmak"''').read() == "":
+                for x in ps:
+                    x.kill()
+            else:
+                os.system("systemctl restart Yashmak")
 
     def get_time(self):
         client = ntplib.NTPClient()
@@ -1481,11 +1518,12 @@ class yashmak():
             traceback.clear_frames(error.__traceback__)
             error.__traceback__ = None
 
-    def find_ports(self):
+    @staticmethod
+    def find_ports(exclude=None):
         ports = set()
         while len(ports) < 1:
             R = str(random.randint(2000, 8000))
-            if int(R) == self.config['port'] or int(R) == self.config['port'] + 1:
+            if int(R) in exclude:
                 continue
             if "windows" in platform.system().lower():
                 if os.popen("netstat -aon | findstr 127.0.0.1:" + R).read() == "" and os.popen("netstat -aon | findstr [::1]:" + R).read() == "":
@@ -1494,7 +1532,7 @@ class yashmak():
                 if os.popen("netstat -tulpn | grep ':" + R + "'").read() == "":
                     ports.add(int(R))
         ports = list(ports)
-        self.config['dns_port'] = ports.pop(0)
+        return ports.pop(0)
 
     def load_config(self):
         self.local_path = os.path.abspath(os.path.dirname(sys.argv[0]))
@@ -1516,6 +1554,8 @@ class yashmak():
                     self.config['proxy'][x]['port'] = int(self.config['proxy'][x]['port'])
                     self.config['proxy'][x]['host'] = self.config['proxy'][x]['host'].encode('utf-8')
             self.config['local_path'] = self.local_path
+            self.config['dns_port'] = self.find_ports([self.config['port']])
+            self.config['log_port'] = self.find_ports([self.config['port'], self.config['dns_port']])
         else:
             example = {'geoip_list_path': '','black_list_path': '','host_list_path': '','cert': '', 'key': '', 'uuid': [''], 'normal_dns': [''],
                        'doh_dns': [''], 'ip': '', 'port': ''}
