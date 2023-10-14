@@ -1,5 +1,5 @@
 #!/bin/bash
-gcc_version="13.1.0"
+gcc_version="13.2.0"
 path=$(cd "$(dirname "$0")";pwd)
 current_gcc_version=$(gcc -dumpversion)
 current_gpp_version=$(g++ -dumpversion)
