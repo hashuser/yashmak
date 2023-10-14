@@ -1,6 +1,6 @@
 #!/bin/bash
 path=$(cd "$(dirname "$0")";pwd)
-python_version="3.11.4"
+python_version="3.11.6"
 python_main_version="3.11"
 current_python_version=$(python$python_main_version -V)
 current_python_version=${current_python_version: 7}
