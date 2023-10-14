@@ -596,6 +596,7 @@ class yashmak_worker(ymc_connect_remote_server):
         self.loop.create_task(self.create_server())
         self.loop.create_task(self.connect_dns_local())
         self.loop.create_task(self.connect_log_local())
+        self.loop.create_task(self.updater_cache())
         self.loop.run_forever()
 
     async def handler(self, client_reader, client_writer):
