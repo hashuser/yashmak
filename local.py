@@ -30,6 +30,11 @@ if "windows" in platform.system().lower():
     import win32print
     import winreg
 
+if "linux" in platform.system().lower():
+    import uvloop
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+
 class ymc_base:
     @staticmethod
     async def clean_up(writer1=None, writer2=None):
@@ -78,19 +83,21 @@ class ymc_base:
                 raise Exception('Unexpected value')
         elif "linux" in platform.system().lower():
             if level.lower() == 'real_time':
-                p.nice(20)
+                p.nice(-20)
             elif level.lower() == 'high':
-                p.nice(10)
+                p.nice(-10)
             elif level.lower() == 'above_normal':
-                p.nice(5)
+                p.nice(-5)
             elif level.lower() == 'normal':
                 p.nice(0)
             elif level.lower() == 'below_normal':
-                p.nice(-5)
+                p.nice(5)
             elif level.lower() == 'idle':
-                p.nice(-20)
+                p.nice(20)
             else:
                 raise Exception('Unexpected value')
+        else:
+            raise Exception('Unsupported Platform')
 
     @staticmethod
     def is_ip(host):
@@ -176,14 +183,23 @@ class ymc_ssl_context:
         context.load_default_certs()
         return context
 
-    def init_proxy_context(self):
+    def init_client_context(self, ca_path=None):
         self.config_path = os.path.abspath(os.path.dirname(sys.argv[0])) + '/Config/'
+        if ca_path is None:
+            ca_path = self.config_path + self.config['cert']
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         context.set_alpn_protocols(['h2', 'http/1.1'])
         context.verify_mode = ssl.CERT_REQUIRED
         context.check_hostname = True
-        context.load_verify_locations(self.config_path + self.config['cert'])
+        context.load_verify_locations(ca_path)
+        return context
+
+    def init_server_context(self):
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_3
+        context.set_alpn_protocols(['http/1.1'])
+        context.load_cert_chain(self.config['cert'], self.config['key'])
         return context
 
 
@@ -520,6 +536,7 @@ class ymc_dns_cache(ymc_base, ymc_connect):
         await self.dns_local_writer.drain()
         asyncio.create_task(self.dns_query_sender())
         asyncio.create_task(self.dns_response_receiver())
+        asyncio.create_task(self.dns_clear_cache())
 
     async def resolve(self, host, force=False):
         if self.is_ip(host):
@@ -649,7 +666,7 @@ class ymc_connect_remote_server(ymc_dns_cache, ymc_internet_status_cache):
         for port in ports:
             for IP in await self.resolve(self.config['host']):
                 try:
-                    server_reader, server_writer = await self.open_connection(IP, port, True, self.config['host'],context=self.proxy_context)
+                    server_reader, server_writer = await self.open_connection(IP, port, True, self.config['host'].decode("utf-8"),context=self.client_context)
                     if len(ports) == 2:
                         self.main_port_fail = 0
                     return server_reader, server_writer
@@ -773,9 +790,8 @@ class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
         self.HSTS_list = self.config['HSTS_list']
         self.EXURL_list = self.config['EXURL_list']
         self.geoip_list = self.config['geoip_list']
-        self.local_ip_list = self.config['local_ip_list']
         self.connection_pool = []
-        self.proxy_context = self.init_proxy_context()
+        self.client_context = self.init_client_context()
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -789,7 +805,6 @@ class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
         self.loop.create_task(self.white_list_updater())
         self.loop.create_task(self.HSTS_list_updater())
         self.loop.create_task(self.push_HSTS_list())
-        self.loop.create_task(self.dns_clear_cache())
         self.loop.create_task(self.connect_dns_local())
         self.loop.run_forever()
 
@@ -884,7 +899,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
             IPs = await self.get_IPs(host)
             for x in range(len(IPs)):
                 address = IPs[int(random.random() * 1000000 % len(IPs))]
-                if self.config['mode'] == 'auto' and not (self.is_china_ip(address) or self.is_local_ip(address)):
+                if self.config['mode'] == 'auto' and not self.is_china_ip(address):
                     abroad = True
                     break
                 elif address not in [b'127.0.0.1', b'::1']:
@@ -1077,7 +1092,7 @@ class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
                 return True
             elif not ip and not self.host_in_it(host, self.white_list):
                 return True
-            elif ip and not self.is_china_ip(host) and not self.is_local_ip(host):
+            elif ip and not self.is_china_ip(host):
                 return True
         return False
 
@@ -1154,10 +1169,8 @@ class yashmak_core(ymc_connect_remote_server, ymc_http_parser):
             return data
 
     def is_china_ip(self, ip):
+        # self.geoip_list contains all local IP-blocks
         return self.ip_in_it(ip,self.geoip_list)
-
-    def is_local_ip(self, ip):
-        return self.ip_in_it(ip,self.local_ip_list)
 
     def exception_handler(self, loop, context):
         pass
@@ -1479,6 +1492,8 @@ class yashmak_dns(ymc_base,ymc_dns_parser,ymc_connect):
     async def dns_make_doh_query(self, query, ID, address, hostname):
         server_writer = None
         try:
+            if isinstance(hostname, bytes):
+                hostname = hostname.decode("utf-8")
             server_reader, server_writer = await self.open_connection(address[0], address[1], True, hostname, 2)
             server_writer.write(b'GET /dns-query?dns=' + base64.b64encode(query).rstrip(b'=') +b' HTTP/1.1\r\nHost: '+ hostname +b'\r\nContent-type: application/dns-message\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.110 Safari/537.36 Edg/96.0.1054.62\r\n\r\n')
             await server_writer.drain()
@@ -1525,7 +1540,7 @@ class yashmak_log(ymc_connect_remote_server):
         self.white_list = self.config['white_list']
         self.HSTS_list = self.config['HSTS_list']
         self.backup(self.config['white_list_path'], 'old.json')
-        self.proxy_context = self.init_proxy_context()
+        self.client_context = self.init_client_context()
         self.set_priority('above_normal')
         response.put('OK')
         self.create_loop()
@@ -1710,7 +1725,8 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
     def create_loop(self):
         self.loop = asyncio.new_event_loop()
         self.loop.set_exception_handler(self.exception_handler)
-        self.loop.create_task(self.yashmak_updater())
+        if "windows" in platform.system().lower():
+            self.loop.create_task(self.yashmak_updater())
         self.loop.create_task(self.accept_command())
         self.loop.create_task(self.send_feedback())
         self.loop.create_task(self.check_parent())
@@ -1767,7 +1783,7 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
             self.config[self.config['active']]['worker'] = (lambda x: os.cpu_count() if x > os.cpu_count() else x)(int(self.config['worker']))
             self.config = self.config[self.config['active']]
             self.config['host'] = self.enhanced_base64_decode(self.config['host'])
-            self.config['port'] = self.enhanced_base64_decode(self.config['port'])
+            self.config['port'] = int(self.enhanced_base64_decode(self.config['port']))
             self.config['uuid'] = self.enhanced_base64_decode(self.config['uuid'])
             self.config['listen'] = int(self.config['listen'])
         else:
@@ -1797,7 +1813,6 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
         self.HSTS_list = set()
         self.EXURL_list = set()
         self.geoip_list = []
-        self.local_ip_list = []
         load_list(self.config['white_list_path'], self.white_list, [self.encode], [(b'*', b'', 1)])
         load_list(self.config['black_list_path'], self.black_list, [self.encode], [(b'*', b'', 1)])
         load_list(self.config['HSTS_list_path'], self.HSTS_list, [self.encode, self.base64_decode], [(b'*', b'', 1)])
@@ -1811,13 +1826,11 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
             network = ipaddress.ip_network(x)
             self.geoip_list.append([int(network[0]),int(network[-1])])
         self.geoip_list.sort()
-        self.local_ip_list.sort()
         self.config['white_list'] = self.white_list
         self.config['black_list'] = self.black_list
         self.config['HSTS_list'] = self.HSTS_list
         self.config['EXURL_list'] = self.EXURL_list
         self.config['geoip_list'] = self.geoip_list
-        self.config['local_ip_list'] = self.local_ip_list
 
     def create_pipes(self):
         self.config['pipes_wl'] = dict()
@@ -1832,7 +1845,9 @@ class yashmak_daemon(ymc_internet_status_cache, ymc_client_updater):
     def find_ports(self):
         ports = set()
         while len(ports) < 1:
-            R = str(random.randint(2000,8000))
+            R = str(random.randint(2000, 8000))
+            if int(R) == self.config['port'] or int(R) == self.config['port'] + 1:
+                continue
             if "windows" in platform.system().lower():
                 if os.popen("netstat -aon | findstr 127.0.0.1:" + R).read() == "" and os.popen("netstat -aon | findstr [::1]:" + R).read() == "":
                     ports.add(int(R))
@@ -1916,7 +1931,7 @@ if "windows" in platform.system().lower():
         def init(self, screen_size):
             # print(os.getpid(), 'GUI')
             gc.set_threshold(100000, 50, 50)
-            if ctypes.windll.shell32.IsUserAnAdmin():
+            if ctypes.windll.shell32.IsUserAnAdmin() and "AllowUWP" in sys.argv:
                 self.enable_loopback_UWPs()
                 sys.exit(0)
             self.real = self.get_real(screen_size)
@@ -2087,7 +2102,7 @@ if "windows" in platform.system().lower():
             elif message == 'EnhancedProxy':
                 self.change_enhanced_proxy_policy()
             elif message == 'AllowUWP':
-                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__, None, 0)
+                ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, __file__ + " AllowUWP", None, 0)
                 self.pop_message('已允许UWP应用连接代理')
             self.tpmen.update()
 
